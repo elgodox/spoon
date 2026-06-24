@@ -7,7 +7,7 @@ import {
   Draggable,
   DropResult,
 } from '@hello-pangea/dnd';
-import { FolderOpen, RefreshCw, GitBranch, GitCommit, Play, X } from 'lucide-react';
+import { FolderOpen, RefreshCw, GitBranch, GitCommit, Play, X, Search } from 'lucide-react';
 
 import {
   Project,
@@ -17,6 +17,8 @@ import {
   ChangeCard,
   CommitGroup,
 } from './types';
+import DiffViewer from './components/DiffViewer';
+import { CommitGraph } from './components/CommitGraph';
 import './App.css';
 
 const UNSTAGED_ID = 'unstaged';
@@ -36,6 +38,14 @@ function App() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string>('');
+
+  // Project filter / search
+  const [projectFilter, setProjectFilter] = useState('');
+
+  // Diff viewer state
+  const [selectedFileForDiff, setSelectedFileForDiff] = useState<{ path: string; staged: boolean } | null>(null);
+  const [currentDiff, setCurrentDiff] = useState('');
+  const [diffLoading, setDiffLoading] = useState(false);
 
   // Open native dir picker and scan
   async function handleOpenDirectory() {
@@ -70,12 +80,25 @@ function App() {
 
     try {
       const brs = (await invoke('get_branches', { repoPath: project.path })) as GitBranchType[];
-      const cms = (await invoke('get_commit_log', { repoPath: project.path, limit: 25 })) as GitCommitType[];
+      const cms = (await invoke('get_commit_log', { repoPath: project.path, limit: 40 })) as GitCommitType[];
       const chgs = (await invoke('get_file_changes', { repoPath: project.path })) as FileChange[];
 
       setBranches(brs);
       setCommits(cms);
       setChanges(chgs);
+
+      // Keep diff viewer open if the file is still there (update staged flag)
+      if (selectedFileForDiff) {
+        const stillThere = chgs.find((c) => c.path === selectedFileForDiff.path);
+        if (stillThere) {
+          const newSel = { path: stillThere.path, staged: stillThere.staged };
+          setSelectedFileForDiff(newSel);
+          // fire and forget reload of diff with new staged state
+          loadFileDiff(stillThere.path, stillThere.staged);
+        } else {
+          closeDiff();
+        }
+      }
 
       // Separate staged vs unstaged properly
       const unstagedCards: ChangeCard[] = chgs
@@ -102,6 +125,69 @@ function App() {
   async function refreshStatus() {
     if (!selectedProject) return;
     await loadProject(selectedProject);
+  }
+
+  // Derived filtered projects
+  const filteredProjects = projects.filter((p) => {
+    const q = projectFilter.toLowerCase().trim();
+    if (!q) return true;
+    return (
+      p.name.toLowerCase().includes(q) ||
+      p.path.toLowerCase().includes(q) ||
+      p.tags.some((t) => t.name.toLowerCase().includes(q))
+    );
+  });
+
+  // Diff loading + selection
+  async function loadFileDiff(filePath: string, isStaged: boolean) {
+    if (!selectedProject) return;
+    setDiffLoading(true);
+    try {
+      const diff: string = await invoke('get_diff', {
+        repoPath: selectedProject.path,
+        filePath,
+        staged: isStaged,
+      });
+      setCurrentDiff(diff);
+    } catch (e) {
+      setCurrentDiff(`Error cargando diff: ${e}`);
+    } finally {
+      setDiffLoading(false);
+    }
+  }
+
+  function selectFileForDiff(file: FileChange) {
+    setSelectedFileForDiff({ path: file.path, staged: file.staged });
+    loadFileDiff(file.path, file.staged);
+  }
+
+  function closeDiff() {
+    setSelectedFileForDiff(null);
+    setCurrentDiff('');
+  }
+
+  async function stageFromDiff() {
+    if (!selectedProject || !selectedFileForDiff) return;
+    await invoke('stage_files', {
+      repoPath: selectedProject.path,
+      files: [selectedFileForDiff.path],
+    });
+    // Refresh the project (rebuilds kanban) and re-open the diff as now staged
+    await loadProject(selectedProject);
+    // Re-select as staged
+    setSelectedFileForDiff({ path: selectedFileForDiff.path, staged: true });
+    await loadFileDiff(selectedFileForDiff.path, true);
+  }
+
+  async function unstageFromDiff() {
+    if (!selectedProject || !selectedFileForDiff) return;
+    await invoke('unstage_files', {
+      repoPath: selectedProject.path,
+      files: [selectedFileForDiff.path],
+    });
+    await loadProject(selectedProject);
+    setSelectedFileForDiff({ path: selectedFileForDiff.path, staged: false });
+    await loadFileDiff(selectedFileForDiff.path, false);
   }
 
   // Drag end handler - core of the Trello-like grouping
@@ -256,10 +342,38 @@ function App() {
       <div className="flex flex-1 overflow-hidden">
         {/* Projects Sidebar */}
         <div className="w-80 border-r border-[#2a2a2f] flex flex-col bg-[#1a1a1d] overflow-y-auto">
-          <div className="px-4 py-3 text-xs font-semibold tracking-wider text-zinc-400 flex items-center justify-between border-b border-[#2a2a2f]">
-            PROYECTOS ({projects.length})
-            {isLoading && <RefreshCw size={14} className="animate-spin" />}
+          <div className="px-3 py-2 border-b border-[#2a2a2f]">
+            <div className="flex items-center gap-2 mb-1.5">
+              <div className="flex-1 relative">
+                <input
+                  type="text"
+                  value={projectFilter}
+                  onChange={(e) => setProjectFilter(e.target.value)}
+                  placeholder="Buscar proyectos (nombre, path o tag)..."
+                  className="w-full bg-[#111113] border border-[#2a2a2f] focus:border-violet-500 rounded-md pl-8 pr-3 py-1.5 text-sm placeholder:text-zinc-500 outline-none"
+                />
+                <Search size={15} className="absolute left-2.5 top-2.5 text-zinc-400" />
+              </div>
+              {projectFilter && (
+                <button
+                  onClick={() => setProjectFilter('')}
+                  className="text-xs px-2 py-1 bg-white/5 rounded hover:bg-white/10"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+            <div className="px-1 text-[10px] text-zinc-400 flex items-center justify-between">
+              <span>
+                PROYECTOS {projectFilter ? `(${filteredProjects.length}/${projects.length})` : `(${projects.length})`}
+              </span>
+              {isLoading && <RefreshCw size={12} className="animate-spin" />}
+            </div>
           </div>
+
+          {filteredProjects.length === 0 && projects.length > 0 && (
+            <div className="p-4 text-sm text-zinc-400">No se encontraron proyectos con ese filtro.</div>
+          )}
 
           {projects.length === 0 && (
             <div className="p-6 text-sm text-zinc-400">
@@ -271,7 +385,7 @@ function App() {
           )}
 
           <div className="p-3 space-y-2">
-            {projects.map((proj) => (
+            {filteredProjects.map((proj) => (
               <div
                 key={proj.id}
                 onClick={() => loadProject(proj)}
@@ -337,11 +451,12 @@ function App() {
                 </div>
               </div>
 
-              {/* Kanban Board */}
-              <div className="flex-1 overflow-x-auto bg-[#111113]">
-                <DragDropContext onDragEnd={onDragEnd}>
-                  <div className="kanban-board">
-                    {commitGroups.map((group) => (
+              {/* Kanban + Diff area */}
+              <div className="flex flex-1 overflow-hidden bg-[#111113]">
+                <div className={`flex-1 overflow-x-auto ${selectedFileForDiff ? 'border-r border-[#2a2a2f]' : ''}`}>
+                  <DragDropContext onDragEnd={onDragEnd}>
+                    <div className="kanban-board">
+                      {commitGroups.map((group) => (
                       <Droppable key={group.id} droppableId={group.id}>
                         {(provided, snapshot) => (
                           <div
@@ -355,7 +470,8 @@ function App() {
                                 <input
                                   value={group.title}
                                   onChange={(e) => updateGroupTitle(group.id, e.target.value)}
-                                  className="bg-transparent font-semibold text-sm w-full focus:outline-none text-white"
+                                  className="bg-transparent font-semibold text-sm w-full focus:outline-none text-white placeholder:text-zinc-500"
+                                  placeholder={group.id === UNSTAGED_ID ? "Cambios sin stage" : "Título / primer línea del commit"}
                                   disabled={group.id === UNSTAGED_ID || group.id === STAGED_ID}
                                 />
                               </div>
@@ -369,12 +485,8 @@ function App() {
                                   </button>
                                 )}
 
-                                {group.cards.length > 0 && group.id !== UNSTAGED_ID && (
-                                  <button onClick={() => commitGroup(group)} className="ml-1 text-[10px] bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 transition px-2 py-px rounded">
-                                    COMMIT
-                                  </button>
-                                )}
-
+                                {/* Main commit action is in the textarea composer below.
+                                    Only show quick unstage for the staged list in header. */}
                                 {group.id === STAGED_ID && group.cards.length > 0 && (
                                   <button onClick={() => unstageGroup(group.id)} className="ml-1 text-[10px] bg-orange-900/70 hover:bg-orange-800 px-2 py-px rounded">
                                     UNSTAGE
@@ -391,7 +503,12 @@ function App() {
                                       ref={prov.innerRef}
                                       {...prov.draggableProps}
                                       {...prov.dragHandleProps}
-                                      className={`kanban-card ${snap.isDragging ? 'shadow-2xl ring-1 ring-violet-400' : ''}`}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        selectFileForDiff(card.file);
+                                      }}
+                                      className={`kanban-card ${snap.isDragging ? 'shadow-2xl ring-1 ring-violet-400' : ''} ${selectedFileForDiff?.path === card.file.path ? 'ring-2 ring-violet-400 !border-violet-500' : ''}`}
+                                      title="Click para ver diff"
                                     >
                                       <div className="font-mono text-[11px] text-emerald-400 truncate">{card.file.path}</div>
                                       <div className="text-[10px] text-zinc-400 flex justify-between mt-0.5">
@@ -404,6 +521,27 @@ function App() {
                               ))}
                               {provided.placeholder}
                             </div>
+
+                            {/* Commit message composer - place to write the commit */}
+                            {(group.cards.length > 0 || group.id !== UNSTAGED_ID) && (
+                              <div className="p-2 border-t border-[#2a2a2f] bg-[#1a1a1d]">
+                                <div className="text-[9px] text-zinc-400 mb-0.5 px-0.5">Mensaje de commit</div>
+                                <textarea
+                                  value={group.title}
+                                  onChange={(e) => updateGroupTitle(group.id, e.target.value)}
+                                  placeholder="Escribe aquí el mensaje del commit..."
+                                  className="w-full bg-[#111113] border border-[#2a2a2f] focus:border-violet-500 rounded p-1.5 text-xs font-mono resize-y min-h-[46px] leading-snug"
+                                />
+                                {group.cards.length > 0 && group.id !== UNSTAGED_ID && (
+                                  <button
+                                    onClick={() => commitGroup(group)}
+                                    className="mt-1 w-full text-xs py-1 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 rounded font-medium"
+                                  >
+                                    COMMIT {group.cards.length} archivos → “{group.title.slice(0, 28)}{group.title.length > 28 ? '…' : ''}”
+                                  </button>
+                                )}
+                              </div>
+                            )}
 
                             {group.id === UNSTAGED_ID && currentUnstaged > 0 && (
                               <div className="p-2 border-t border-[#2a2a2f]">
@@ -428,48 +566,72 @@ function App() {
                 </DragDropContext>
               </div>
 
-              {/* Bottom panels: Branches + Recent Commits */}
-              <div className="h-52 border-t border-[#2a2a2f] bg-[#0f0f11] flex overflow-hidden flex-shrink-0 text-sm">
-                {/* Branches */}
-                <div className="w-1/2 border-r border-[#2a2a2f] p-3 overflow-auto">
-                  <div className="uppercase tracking-[1px] text-[10px] font-semibold text-zinc-400 mb-2 flex items-center gap-2">
-                    <GitBranch size={13} /> BRANCHES
-                  </div>
-                  <div className="flex flex-wrap gap-1">
-                    {branches.slice(0, 18).map((b) => (
-                      <button
-                        key={b.name}
-                        onClick={async () => {
-                          if (!selectedProject || b.is_current) return;
-                          await invoke('checkout_branch', { repoPath: selectedProject.path, branch: b.name });
-                          await loadProject(selectedProject);
-                        }}
-                        className={`px-2 py-0.5 rounded text-xs border ${b.is_current ? 'bg-emerald-900/70 border-emerald-600' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
-                        title={b.is_remote ? 'remote' : 'local'}
-                      >
-                        {b.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              {/* Diff viewer sidebar (appears when a file card is clicked) */}
+              {selectedFileForDiff && (
+                <DiffViewer
+                  filePath={selectedFileForDiff.path}
+                  staged={selectedFileForDiff.staged}
+                  diff={currentDiff}
+                  onStage={stageFromDiff}
+                  onUnstage={unstageFromDiff}
+                  onClose={closeDiff}
+                  isLoading={diffLoading}
+                />
+              )}
+            </div>
 
-                {/* Recent Commits */}
-                <div className="w-1/2 p-3 overflow-auto">
-                  <div className="uppercase tracking-[1px] text-[10px] font-semibold text-zinc-400 mb-2 flex items-center gap-2">
-                    <GitCommit size={13} /> ÚLTIMOS COMMITS
-                  </div>
-                  <div className="space-y-1 text-xs">
-                    {commits.slice(0, 6).map((c) => (
-                      <div key={c.hash} className="flex gap-2 items-start border-l-2 border-zinc-700 pl-2 py-0.5 hover:bg-white/5">
-                        <span className="font-mono text-emerald-400/80 shrink-0 w-[52px]">{c.short_hash}</span>
-                        <div className="truncate text-zinc-300">{c.message}</div>
-                        <div className="ml-auto text-[10px] text-zinc-500 whitespace-nowrap">{new Date(c.date).toLocaleDateString()}</div>
-                      </div>
-                    ))}
-                    {commits.length === 0 && <div className="text-zinc-500">Sin commits o repo vacío</div>}
-                  </div>
+            {/* Bottom panels: Branches + Visual Commit Graph (Fork-style thread) */}
+            <div className="h-52 border-t border-[#2a2a2f] bg-[#0f0f11] flex overflow-hidden flex-shrink-0 text-sm">
+              {/* Branches (quick switch) */}
+              <div className="w-72 border-r border-[#2a2a2f] p-3 overflow-auto flex-shrink-0">
+                <div className="uppercase tracking-[1px] text-[10px] font-semibold text-zinc-400 mb-2 flex items-center gap-2">
+                  <GitBranch size={13} /> BRANCHES
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {branches.slice(0, 18).map((b) => (
+                    <button
+                      key={b.name}
+                      onClick={async () => {
+                        if (!selectedProject || b.is_current) return;
+                        await invoke('checkout_branch', { repoPath: selectedProject.path, branch: b.name });
+                        await loadProject(selectedProject);
+                      }}
+                      className={`px-2 py-0.5 rounded text-xs border ${b.is_current ? 'bg-emerald-900/70 border-emerald-600' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                      title={b.is_remote ? 'remote' : 'local'}
+                    >
+                      {b.name}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-[9px] text-zinc-500 mt-2">Click para checkout</div>
+              </div>
+
+              {/* Visual Commit History - Fork style thread/graph */}
+              <div className="flex-1 overflow-hidden">
+                <div className="px-2 pt-1 pb-0.5 uppercase tracking-[1px] text-[10px] font-semibold text-zinc-400 flex items-center gap-2">
+                  <GitCommit size={13} /> HISTORY (visual graph)
+                </div>
+                <div className="h-[calc(100%-18px)]">
+                  <CommitGraph
+                    commits={commits}
+                    branches={branches}
+                    currentBranch={branches.find((b) => b.is_current)?.name || null}
+                    onCheckout={async (commit) => {
+                      if (!selectedProject) return;
+                      // Checkout the specific commit (detached HEAD)
+                      try {
+                        await invoke('checkout_branch', { repoPath: selectedProject.path, branch: commit.hash });
+                        await loadProject(selectedProject);
+                        setStatusMsg(`Checked out ${commit.short_hash}`);
+                        setTimeout(() => setStatusMsg(''), 2000);
+                      } catch (e: any) {
+                        setStatusMsg('Error checkout: ' + e);
+                      }
+                    }}
+                  />
                 </div>
               </div>
+            </div>
             </>
           )}
         </div>

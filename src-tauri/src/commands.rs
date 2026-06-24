@@ -41,6 +41,7 @@ pub struct GitBranch {
 pub struct GitCommit {
     pub hash: String,
     pub short_hash: String,
+    pub parents: Vec<String>,
     pub author: String,
     pub email: String,
     pub date: String,
@@ -380,14 +381,14 @@ pub fn get_branches(repo_path: String) -> Result<Vec<GitBranch>, String> {
 
 #[tauri::command]
 pub fn get_commit_log(repo_path: String, limit: Option<usize>) -> Result<Vec<GitCommit>, String> {
-    let lim = limit.unwrap_or(30);
+    let lim = limit.unwrap_or(50);
     let output = Command::new("git")
         .arg("-C")
         .arg(&repo_path)
         .args([
             "log",
             &format!("-{}", lim),
-            "--pretty=format:%H|%h|%an|%ae|%ci|%s|%D",
+            "--pretty=format:%H|%h|%P|%an|%ae|%ci|%s|%D",
             "--date=iso",
         ])
         .output()
@@ -401,10 +402,20 @@ pub fn get_commit_log(repo_path: String, limit: Option<usize>) -> Result<Vec<Git
     let mut commits = vec![];
 
     for line in stdout.lines() {
-        let parts: Vec<&str> = line.splitn(7, '|').collect();
-        if parts.len() >= 6 {
-            let refs = if parts.len() > 6 {
-                parts[6]
+        let parts: Vec<&str> = line.splitn(8, '|').collect();
+        if parts.len() >= 7 {
+            let parents: Vec<String> = if parts.len() > 2 && !parts[2].trim().is_empty() {
+                parts[2]
+                    .split(' ')
+                    .filter(|s| !s.trim().is_empty())
+                    .map(|s| s.to_string())
+                    .collect()
+            } else {
+                vec![]
+            };
+
+            let refs = if parts.len() > 7 {
+                parts[7]
                     .split(", ")
                     .filter(|s| !s.trim().is_empty())
                     .map(|s| s.to_string())
@@ -416,10 +427,11 @@ pub fn get_commit_log(repo_path: String, limit: Option<usize>) -> Result<Vec<Git
             commits.push(GitCommit {
                 hash: parts[0].to_string(),
                 short_hash: parts[1].to_string(),
-                author: parts[2].to_string(),
-                email: parts[3].to_string(),
-                date: parts[4].to_string(),
-                message: parts[5].to_string(),
+                parents,
+                author: parts[3].to_string(),
+                email: parts[4].to_string(),
+                date: parts[5].to_string(),
+                message: parts[6].to_string(),
                 refs,
             });
         }
