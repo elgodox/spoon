@@ -56,12 +56,6 @@ Scan any folder on your machine → instantly see all your Git projects with sma
 - Professional top bar with icon buttons (open folder, refresh, etc.).
 - Status bar, loading states, friendly Spanish/English mixed UI (easy to localize).
 
-## 📸 Screenshot
-
-![Spoon main interface](screenshot.png)
-
-(The layout shows projects (collapsible), refs, files, diff/preview area, and the PowerShell column on the right.)
-
 ## 🛠️ Tech Stack
 
 - **Tauri v2** (Rust backend + webview frontend) — tiny native binary, excellent Windows integration.
