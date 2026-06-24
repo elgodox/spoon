@@ -1,0 +1,128 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: dark;
+  color: #e5e5e5;
+  background-color: #18181b;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+/* Spoon / Trello-like Kanban base styles */
+.kanban-board {
+  display: flex;
+  gap: 12px;
+  padding: 16px;
+  overflow-x: auto;
+  min-height: 70vh;
+  background: #111113;
+}
+
+.kanban-list {
+  background: #1f1f23;
+  border-radius: 8px;
+  width: 280px;
+  min-width: 280px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  border: 1px solid #2a2a2f;
+}
+
+.kanban-list-header {
+  padding: 12px 14px;
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #a3a3a3;
+  border-bottom: 1px solid #2a2a2f;
+  background: #26262b;
+  border-radius: 8px 8px 0 0;
+}
+
+.kanban-list-content {
+  padding: 8px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.kanban-card {
+  background: #2a2a2f;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  border: 1px solid #35353b;
+  cursor: grab;
+  user-select: none;
+  font-size: 13px;
+  line-height: 1.4;
+  transition: box-shadow .1s ease, transform .1s ease;
+}
+
+.kanban-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  border-color: #4a4a52;
+}
+
+.kanban-card:active {
+  cursor: grabbing;
+  transform: scale(1.01);
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 500;
+  margin-right: 4px;
+  margin-bottom: 2px;
+}
+
+.tag-unity { background: #3b2a6e; color: #c7b3ff; }
+.tag-csharp { background: #512bd4; color: white; }
+.tag-dotnet { background: #512bd4; color: #ddd6fe; }
+.tag-python { background: #306998; color: #ffde57; }
+.tag-js { background: #f0db4f; color: #323330; }
+.tag-ts { background: #3178c6; color: white; }
+.tag-rust { background: #dea584; color: #1f1f1f; }
+.tag-go { background: #00add8; color: white; }
+
+.project-card {
+  background: #1f1f23;
+  border: 1px solid #2a2a2f;
+  border-radius: 8px;
+  padding: 12px;
+  transition: transform 0.1s, border-color 0.1s;
+}
+
+.project-card:hover {
+  border-color: #52525b;
+  transform: translateY(-1px);
+}
+
+.repo-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 11px;
+  color: #71717a;
+  word-break: break-all;
+}
+

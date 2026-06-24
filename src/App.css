@@ -1,0 +1,22 @@
+/* Global polish for Spoon */
+html, body, #root {
+  height: 100%;
+}
+
+button {
+  transition: all 0.1s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+button:active {
+  transform: translateY(1px);
+}
+
+/* Scrollbar for kanban */
+.kanban-list-content::-webkit-scrollbar {
+  width: 5px;
+}
+.kanban-list-content::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 10px;
+}
+
