@@ -8,11 +8,6 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "fs:default",
-    "fs:allow-read-dir",
-    "fs:allow-read-text-file",
-    "fs:allow-read-file",
-    "fs:allow-exists",
     "core:window:default",
     "core:path:default",
     "core:app:default"

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 use walkdir::WalkDir;
@@ -28,6 +29,7 @@ pub struct Project {
     pub git_status: Option<GitStatus>,
     pub last_commit: Option<String>,
     pub last_commit_date: Option<String>,
+    pub is_unsafe: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -54,6 +56,19 @@ pub struct FileChange {
     pub path: String,
     pub status: String, // "modified", "added", "deleted", "renamed", "untracked"
     pub staged: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CommandResult {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct DetectedCli {
+    pub name: String,
+    pub path: String,
 }
 
 #[tauri::command]
@@ -97,6 +112,8 @@ pub fn scan_directory(root_path: String) -> Result<Vec<Project>, String> {
             let git_status = get_git_status(path).ok();
             let last_commit = get_last_commit_info(path).ok();
 
+            let is_unsafe = !is_repo_safe(path.to_string_lossy().to_string()).unwrap_or(true);
+
             let project = Project {
                 id: path.to_string_lossy().to_string(),
                 name,
@@ -106,6 +123,7 @@ pub fn scan_directory(root_path: String) -> Result<Vec<Project>, String> {
                 git_status,
                 last_commit: last_commit.as_ref().map(|c| c.message.clone()),
                 last_commit_date: last_commit.as_ref().map(|c| c.date.clone()),
+                is_unsafe,
             };
             projects.push(project);
         }
@@ -380,6 +398,97 @@ pub fn get_branches(repo_path: String) -> Result<Vec<GitBranch>, String> {
 }
 
 #[tauri::command]
+pub fn get_remotes(repo_path: String) -> Result<Vec<String>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo_path)
+        .args(["remote"])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Ok(vec![]);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect())
+}
+
+#[tauri::command]
+pub fn get_project_status(repo_path: String) -> Result<GitStatus, String> {
+    get_git_status(Path::new(&repo_path))
+}
+
+#[tauri::command]
+pub fn run_git_command(repo_path: String, args: Vec<String>) -> Result<CommandResult, String> {
+    if args.is_empty() {
+        return Err("Missing git arguments".into());
+    }
+
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo_path)
+        .args(&args)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    Ok(CommandResult {
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+    })
+}
+
+#[tauri::command]
+pub fn detect_cli_commands() -> Result<Vec<DetectedCli>, String> {
+    let path_value = std::env::var("PATH").unwrap_or_default();
+    let mut found = BTreeMap::<String, String>::new();
+
+    for dir in std::env::split_paths(&path_value) {
+        if !dir.is_dir() {
+            continue;
+        }
+
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|value| value.to_ascii_lowercase())
+                .unwrap_or_default();
+
+            if !matches!(extension.as_str(), "exe" | "cmd" | "bat" | "com" | "ps1") {
+                continue;
+            }
+
+            let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+
+            let name = stem.to_ascii_lowercase();
+            found.entry(name).or_insert_with(|| path.to_string_lossy().to_string());
+        }
+    }
+
+    Ok(found
+        .into_iter()
+        .map(|(name, path)| DetectedCli { name, path })
+        .collect())
+}
+
+#[tauri::command]
 pub fn get_commit_log(repo_path: String, limit: Option<usize>) -> Result<Vec<GitCommit>, String> {
     let lim = limit.unwrap_or(50);
     let output = Command::new("git")
@@ -586,4 +695,231 @@ pub fn get_diff(repo_path: String, file_path: String, staged: bool) -> Result<St
         .map_err(|e| e.to_string())?;
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[tauri::command]
+pub fn get_tags(repo_path: String) -> Result<Vec<String>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo_path)
+        .args(["tag", "--list", "--sort=-creatordate"])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Ok(vec![]);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .take(100)
+        .collect())
+}
+
+#[tauri::command]
+pub fn get_stashes(repo_path: String) -> Result<Vec<String>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo_path)
+        .args(["stash", "list", "--pretty=format:%gd %s"])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !output.status.success() {
+        return Ok(vec![]);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect())
+}
+
+#[tauri::command]
+pub fn is_repo_safe(repo_path: String) -> Result<bool, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&repo_path)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("dubious ownership") || stderr.contains("unsafe") || stderr.contains("detected dubious ownership") {
+        Ok(false)
+    } else {
+        // other error, treat as safe for now or let it fail later
+        Ok(true)
+    }
+}
+
+#[tauri::command]
+pub fn add_safe_directory(path: String) -> Result<(), String> {
+    // Normalize to forward slashes for Git on Windows (required for safe.directory to work reliably)
+    let normalized = path.replace('\\', "/");
+    let status = Command::new("git")
+        .args(["config", "--global", "--add", "safe.directory", &normalized])
+        .status()
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("Failed to add safe.directory exception for {}", normalized))
+    }
+}
+
+#[tauri::command]
+pub fn delete_local_branch(repo_path: String, branch: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["branch", "-D", &branch])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err(format!("Failed to delete branch {}", branch)) }
+}
+
+#[tauri::command]
+pub fn create_branch(repo_path: String, branch: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["branch", &branch])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to create branch".into()) }
+}
+
+#[tauri::command]
+pub fn add_remote(repo_path: String, name: String, url: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["remote", "add", &name, &url])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to add remote".into()) }
+}
+
+#[tauri::command]
+pub fn set_remote_url(repo_path: String, name: String, url: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["remote", "set-url", &name, &url])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to update remote".into()) }
+}
+
+#[tauri::command]
+pub fn get_remote_url(repo_path: String, name: String) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["remote", "get-url", &name])
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        return Err("Failed to read remote URL".into());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[tauri::command]
+pub fn create_tag(repo_path: String, tag: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["tag", &tag])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to create tag".into()) }
+}
+
+#[tauri::command]
+pub fn create_stash(repo_path: String, message: Option<String>) -> Result<(), String> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(&repo_path).arg("stash").arg("push").arg("-u");
+    if let Some(msg) = message {
+        if !msg.trim().is_empty() {
+            cmd.arg("-m").arg(msg.trim());
+        }
+    }
+    let status = cmd.status().map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to create stash".into()) }
+}
+
+#[tauri::command]
+pub fn discard_file_changes(repo_path: String, file_path: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["restore", "--source=HEAD", "--staged", "--worktree", "--", &file_path])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to discard file changes".into()) }
+}
+
+#[tauri::command]
+pub fn delete_untracked_file(repo_path: String, file_path: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["clean", "-f", "--", &file_path])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to delete untracked file".into()) }
+}
+
+#[tauri::command]
+pub fn stash_pop(repo_path: String, stash_ref: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["stash", "pop", &stash_ref])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to pop stash".into()) }
+}
+
+#[tauri::command]
+pub fn stash_apply(repo_path: String, stash_ref: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["stash", "apply", &stash_ref])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to apply stash".into()) }
+}
+
+#[tauri::command]
+pub fn stash_drop(repo_path: String, stash_ref: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["stash", "drop", &stash_ref])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to drop stash".into()) }
+}
+
+#[tauri::command]
+pub fn delete_tag(repo_path: String, tag: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["tag", "-d", &tag])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to delete tag".into()) }
+}
+
+#[tauri::command]
+pub fn delete_remote(repo_path: String, remote: String) -> Result<(), String> {
+    let status = Command::new("git")
+        .arg("-C").arg(&repo_path)
+        .args(["remote", "remove", &remote])
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() { Ok(()) } else { Err("Failed to remove remote".into()) }
 }

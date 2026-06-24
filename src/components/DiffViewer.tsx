@@ -3,23 +3,30 @@ import React from 'react';
 interface DiffViewerProps {
   filePath: string;
   staged: boolean;
+  status?: string;
   diff: string;
   onStage: () => void;
   onUnstage: () => void;
   onClose: () => void;
   isLoading?: boolean;
+  previewKind?: 'image' | 'video' | 'audio' | 'pdf' | 'binary';
+  previewUrl?: string | null;
 }
 
 export const DiffViewer: React.FC<DiffViewerProps> = ({
   filePath,
   staged,
+  status,
   diff,
   onStage,
   onUnstage,
   onClose,
   isLoading,
+  previewKind,
+  previewUrl,
 }) => {
   const lines = diff ? diff.split('\n') : [];
+  const isPreviewable = Boolean(previewKind && previewUrl);
 
   const renderLine = (line: string, index: number) => {
     let className = 'diff-line px-2 py-px font-mono text-xs leading-tight whitespace-pre';
@@ -46,7 +53,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full border-l border-[#2a2a2f] bg-[#111113] min-w-[380px] max-w-[520px] w-2/5">
+    <div className="flex flex-col h-full bg-[#111113] min-w-[280px] flex-1 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-[#2a2a2f] bg-[#1a1a1d] flex-shrink-0">
         <div className="min-w-0">
@@ -58,7 +65,13 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
               <span className="text-amber-400">WORKING TREE</span>
             )}
             <span>•</span>
-            <span>{lines.length} líneas</span>
+            <span>{status ?? 'modified'}</span>
+            {!isPreviewable && (
+              <>
+                <span>•</span>
+                <span>{lines.length} líneas</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -93,10 +106,29 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       <div className="flex-1 overflow-auto p-1 bg-[#0a0a0b] custom-scrollbar">
         {isLoading ? (
           <div className="p-4 text-center text-sm text-zinc-400">Cargando diff...</div>
+        ) : isPreviewable && previewKind === 'image' ? (
+          <div className="h-full flex items-center justify-center p-4">
+            <img src={previewUrl ?? undefined} alt={filePath} className="max-h-full max-w-full object-contain rounded border border-[#2a2a2f]" />
+          </div>
+        ) : isPreviewable && previewKind === 'video' ? (
+          <div className="h-full flex items-center justify-center p-4">
+            <video src={previewUrl ?? undefined} controls className="max-h-full max-w-full rounded border border-[#2a2a2f]" />
+          </div>
+        ) : isPreviewable && previewKind === 'audio' ? (
+          <div className="h-full flex items-center justify-center p-4">
+            <audio src={previewUrl ?? undefined} controls className="w-full max-w-xl" />
+          </div>
+        ) : isPreviewable && previewKind === 'pdf' ? (
+          <iframe src={previewUrl ?? undefined} className="h-full w-full rounded border border-[#2a2a2f]" title={filePath} />
+        ) : previewKind === 'binary' ? (
+          <div className="p-4 text-center">
+            <div className="text-sm text-zinc-300">Vista previa binaria no soportada.</div>
+            <div className="text-xs text-zinc-500 mt-1">Imágenes, video, audio y PDF se muestran acá cuando existen en el working tree.</div>
+          </div>
         ) : !diff || diff.trim() === '' ? (
           <div className="p-4 text-center">
             <div className="text-sm text-zinc-400">No hay cambios para mostrar.</div>
-            <div className="text-xs text-zinc-500 mt-1">El archivo puede estar vacío o solo renombrado.</div>
+            <div className="text-xs text-zinc-500 mt-1">El archivo puede estar vacío, binario, borrado o solo renombrado.</div>
           </div>
         ) : (
           <div className="text-[13px] leading-[1.25]">
@@ -106,7 +138,7 @@ export const DiffViewer: React.FC<DiffViewerProps> = ({
       </div>
 
       <div className="px-3 py-1.5 text-[10px] text-zinc-500 border-t border-[#2a2a2f] bg-[#1a1a1d]">
-        Click en una tarjeta del kanban para inspeccionar cambios. Arrastra la tarjeta para agrupar antes de commitear.
+        Vista previa para imágenes, video, audio y PDF. Para texto se muestra el diff.
       </div>
     </div>
   );

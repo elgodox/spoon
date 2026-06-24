@@ -20,6 +20,7 @@ export interface Project {
   git_status?: GitStatus;
   last_commit?: string;
   last_commit_date?: string;
+  is_unsafe: boolean;
 }
 
 export interface GitBranch {
@@ -45,7 +46,18 @@ export interface FileChange {
   staged: boolean;
 }
 
-// Kanban model (frontend state)
+export interface CommandResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+}
+
+export interface DetectedCli {
+  name: string;
+  path: string;
+}
+
+// (legacy types kept for reference)
 export type ChangeCard = {
   id: string;
   file: FileChange;

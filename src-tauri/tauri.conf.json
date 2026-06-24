@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Spoon",
   "version": "0.1.0",
-  "identifier": "com.spoon.gitkanban",
+  "identifier": "com.spoon.spoon",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Spoon • Git Kanban",
+        "title": "Spoon • Git",
         "width": 800,
         "height": 600,
         "resizable": true,
@@ -20,7 +20,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost; media-src 'self' asset: http://asset.localhost; frame-src 'self' asset: http://asset.localhost; object-src 'self' asset: http://asset.localhost;",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**/*"]
+      }
     }
   },
   "bundle": {

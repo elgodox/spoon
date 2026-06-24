@@ -1,7 +1,7 @@
 [package]
 name = "spoon"
 version = "0.1.0"
-description = "Spoon - Git client with Trello-style Kanban UI for local projects"
+description = "Spoon - Powerful desktop Git client for Windows with project discovery, rich previews and embedded PowerShell"
 authors = ["Spoon Contributors"]
 license = "MIT"
 repository = ""
@@ -21,11 +21,14 @@ tauri-build = { version = "2.6.3", features = [] }
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tauri = { version = "2.11.3", features = ["unstable"] }
+tauri = { version = "2.11.3", features = ["protocol-asset", "unstable"] }
 tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
-tauri-plugin-fs = "2"
 
 # FS scanning + Git via CLI (reliable, no heavy vendored compile)
 walkdir = "2"
 chrono = { version = "0.4", features = ["serde"] }
+
+# For embedded interactive PowerShell terminal (PTY)
+portable-pty = "0.8"
+winreg = "0.52"

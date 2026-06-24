@@ -1,9 +1,8 @@
 import React from 'react';
-import { GitCommit, GitBranch } from '../types';
+import { GitCommit } from '../types';
 
 interface CommitGraphProps {
   commits: GitCommit[];
-  branches: GitBranch[];
   currentBranch?: string | null;
   onCheckout?: (commit: GitCommit) => void;
 }

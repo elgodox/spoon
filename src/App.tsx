@@ -1,40 +1,69 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
-import { invoke } from '@tauri-apps/api/core';
-import {
-  DragDropContext,
-  Droppable,
-  Draggable,
-  DropResult,
-} from '@hello-pangea/dnd';
-import { FolderOpen, RefreshCw, GitBranch, GitCommit, Play, X, Search } from 'lucide-react';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
+
+import { FolderOpen, RefreshCw, GitBranch, Search } from 'lucide-react';
 
 import {
+  CommandResult,
+  DetectedCli,
   Project,
   GitBranch as GitBranchType,
-  GitCommit as GitCommitType,
   FileChange,
-  ChangeCard,
-  CommitGroup,
+  GitStatus,
 } from './types';
 import DiffViewer from './components/DiffViewer';
-import { CommitGraph } from './components/CommitGraph';
+import { AITerminal } from './components/Terminal';
 import './App.css';
 
-const UNSTAGED_ID = 'unstaged';
-const STAGED_ID = 'staged';
+// Constants removed - no longer using Trello-style groups
+
+type ResizableColumnKey = 'projects' | 'refs' | 'files' | 'diff';
+
+const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
+  projects: 320,
+  refs: 256,
+  files: 384,
+  diff: 720,
+};
+
+const MIN_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
+  projects: 240,
+  refs: 220,
+  files: 280,
+  diff: 360,
+};
 
 function App() {
+  const imageExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
+  const videoExtensions = new Set(['mp4', 'webm', 'mov', 'm4v', 'avi', 'mkv']);
+  const audioExtensions = new Set(['mp3', 'wav', 'ogg', 'm4a', 'flac']);
+  const pdfExtensions = new Set(['pdf']);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [branches, setBranches] = useState<GitBranchType[]>([]);
-  const [commits, setCommits] = useState<GitCommitType[]>([]);
-  const [, setChanges] = useState<FileChange[]>([]);
+  const [cliCommands, setCliCommands] = useState<DetectedCli[]>([]);
+  const [remotes, setRemotes] = useState<string[]>([]);
+  const [changes, setChanges] = useState<FileChange[]>([]);
+  const [tags, setTags] = useState<string[]>([]);
+  const [stashes, setStashes] = useState<string[]>([]);
 
-  // Kanban state: groups of commits (Trello lists)
-  const [commitGroups, setCommitGroups] = useState<CommitGroup[]>([
-    { id: 'group-1', title: 'Primer commit', cards: [] },
-  ]);
+  // Projects sidebar (left column with list + buscador)
+  const [showProjectsSidebar, setShowProjectsSidebar] = useState(true);
+  const [autoHideProjects, setAutoHideProjects] = useState(false);
+  const [columnWidths, setColumnWidths] = useState<Record<ResizableColumnKey, number>>(() => {
+    const saved = localStorage.getItem('columnWidths');
+    if (!saved) return DEFAULT_COLUMN_WIDTHS;
+    try {
+      return { ...DEFAULT_COLUMN_WIDTHS, ...JSON.parse(saved) };
+    } catch {
+      return DEFAULT_COLUMN_WIDTHS;
+    }
+  });
+  const dragRef = useRef<{ key: ResizableColumnKey; startX: number; startWidth: number } | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
+
+
 
   const [isLoading, setIsLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string>('');
@@ -43,9 +72,93 @@ function App() {
   const [projectFilter, setProjectFilter] = useState('');
 
   // Diff viewer state
-  const [selectedFileForDiff, setSelectedFileForDiff] = useState<{ path: string; staged: boolean } | null>(null);
+  const [selectedFileForDiff, setSelectedFileForDiff] = useState<{ path: string; staged: boolean; status: string } | null>(null);
   const [currentDiff, setCurrentDiff] = useState('');
   const [diffLoading, setDiffLoading] = useState(false);
+  const [preview, setPreview] = useState<{ kind?: 'image' | 'video' | 'audio' | 'pdf' | 'binary'; url: string | null }>({ url: null });
+
+
+
+  // Remember last directory and filter
+  const [_lastDir, setLastDir] = useState(() => localStorage.getItem('lastDir') || '');
+
+  useEffect(() => {
+    localStorage.setItem('projectFilter', projectFilter);
+  }, [projectFilter]);
+
+  useEffect(() => {
+    invoke<DetectedCli[]>('detect_cli_commands')
+      .then((detected) => setCliCommands(detected))
+      .catch((err) => console.error('detect_cli_commands failed', err));
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('columnWidths', JSON.stringify(columnWidths));
+  }, [columnWidths]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+
+      const nextWidth = Math.max(
+        MIN_COLUMN_WIDTHS[drag.key],
+        drag.startWidth + (event.clientX - drag.startX)
+      );
+
+      setColumnWidths((prev) => (
+        prev[drag.key] === nextWidth ? prev : { ...prev, [drag.key]: nextWidth }
+      ));
+    };
+
+    const handleMouseUp = () => {
+      dragRef.current = null;
+      setIsResizing(false);
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
+
+  // Auto-load last directory on startup
+  useEffect(() => {
+    const savedDir = localStorage.getItem('lastDir');
+    if (savedDir && projects.length === 0) {
+      (async () => {
+        try {
+          setIsLoading(true);
+          setStatusMsg('Cargando último directorio...');
+          const scanned: Project[] = await invoke('scan_directory', { rootPath: savedDir });
+          setProjects(scanned);
+          setLastDir(savedDir);
+          if (scanned.length > 0) {
+            // auto-select first project so the inner view + shell starts immediately
+            setTimeout(() => loadProject(scanned[0]), 0);
+          }
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setIsLoading(false);
+          setStatusMsg('');
+        }
+      })();
+    }
+    const savedFilter = localStorage.getItem('projectFilter');
+    if (savedFilter) setProjectFilter(savedFilter);
+  }, []);
+
+
 
   // Open native dir picker and scan
   async function handleOpenDirectory() {
@@ -63,6 +176,9 @@ function App() {
 
       const scanned: Project[] = await invoke('scan_directory', { rootPath: selected });
       setProjects(scanned);
+      const pathStr = selected as string;
+      localStorage.setItem('lastDir', pathStr);
+      setLastDir(pathStr);
 
       setStatusMsg(`Encontrados ${scanned.length} repositorios Git`);
       setTimeout(() => setStatusMsg(''), 2500);
@@ -80,40 +196,39 @@ function App() {
 
     try {
       const brs = (await invoke('get_branches', { repoPath: project.path })) as GitBranchType[];
-      const cms = (await invoke('get_commit_log', { repoPath: project.path, limit: 40 })) as GitCommitType[];
+      const rms = (await invoke('get_remotes', { repoPath: project.path })) as string[];
       const chgs = (await invoke('get_file_changes', { repoPath: project.path })) as FileChange[];
+      const tgs = (await invoke('get_tags', { repoPath: project.path })) as string[];
+      const sts = (await invoke('get_stashes', { repoPath: project.path })) as string[];
+      const gitStatus = (await invoke('get_project_status', { repoPath: project.path })) as GitStatus;
 
       setBranches(brs);
-      setCommits(cms);
+      setRemotes(rms);
       setChanges(chgs);
+      setTags(tgs);
+      setStashes(sts);
+      setProjects((prev) => prev.map((item) => (
+        item.id === project.id ? { ...item, git_status: gitStatus } : item
+      )));
+      setSelectedProject((prev) => (
+        prev?.id === project.id ? { ...prev, git_status: gitStatus } : prev
+      ));
+
+      if (autoHideProjects) {
+        setShowProjectsSidebar(false);
+      }
 
       // Keep diff viewer open if the file is still there (update staged flag)
       if (selectedFileForDiff) {
         const stillThere = chgs.find((c) => c.path === selectedFileForDiff.path);
         if (stillThere) {
-          const newSel = { path: stillThere.path, staged: stillThere.staged };
+          const newSel = { path: stillThere.path, staged: stillThere.staged, status: stillThere.status };
           setSelectedFileForDiff(newSel);
-          // fire and forget reload of diff with new staged state
           loadFileDiff(stillThere.path, stillThere.staged);
         } else {
           closeDiff();
         }
       }
-
-      // Separate staged vs unstaged properly
-      const unstagedCards: ChangeCard[] = chgs
-        .filter((c) => !c.staged)
-        .map((c, idx) => ({ id: `unstaged-${idx}`, file: c }));
-
-      const stagedCards: ChangeCard[] = chgs
-        .filter((c) => c.staged)
-        .map((c, idx) => ({ id: `staged-${idx}`, file: c }));
-
-      setCommitGroups([
-        { id: UNSTAGED_ID, title: 'Cambios sin stage', cards: unstagedCards },
-        { id: 'group-1', title: 'Mi commit #1', cards: [] },
-        { id: STAGED_ID, title: 'Staged (listos para commit)', cards: stagedCards },
-      ]);
     } catch (e: any) {
       console.error(e);
       setStatusMsg('Error cargando datos del repo: ' + e);
@@ -156,11 +271,6 @@ function App() {
     }
   }
 
-  function selectFileForDiff(file: FileChange) {
-    setSelectedFileForDiff({ path: file.path, staged: file.staged });
-    loadFileDiff(file.path, file.staged);
-  }
-
   function closeDiff() {
     setSelectedFileForDiff(null);
     setCurrentDiff('');
@@ -172,10 +282,10 @@ function App() {
       repoPath: selectedProject.path,
       files: [selectedFileForDiff.path],
     });
-    // Refresh the project (rebuilds kanban) and re-open the diff as now staged
+    // Refresh the project and re-open the diff as now staged
     await loadProject(selectedProject);
     // Re-select as staged
-    setSelectedFileForDiff({ path: selectedFileForDiff.path, staged: true });
+    setSelectedFileForDiff({ path: selectedFileForDiff.path, staged: true, status: selectedFileForDiff.status });
     await loadFileDiff(selectedFileForDiff.path, true);
   }
 
@@ -186,112 +296,358 @@ function App() {
       files: [selectedFileForDiff.path],
     });
     await loadProject(selectedProject);
-    setSelectedFileForDiff({ path: selectedFileForDiff.path, staged: false });
+    setSelectedFileForDiff({ path: selectedFileForDiff.path, staged: false, status: selectedFileForDiff.status });
     await loadFileDiff(selectedFileForDiff.path, false);
   }
 
-  // Drag end handler - core of the Trello-like grouping
-  function onDragEnd(result: DropResult) {
-    const { source, destination } = result;
-    if (!destination) return;
-
-    // Reorder or move between lists
-    setCommitGroups((prevGroups) => {
-      const newGroups = [...prevGroups];
-
-      const sourceGroupIndex = newGroups.findIndex(g => g.id === source.droppableId);
-      const destGroupIndex = newGroups.findIndex(g => g.id === destination.droppableId);
-
-      if (sourceGroupIndex === -1 || destGroupIndex === -1) return prevGroups;
-
-      const sourceGroup = { ...newGroups[sourceGroupIndex] };
-      const destGroup = { ...newGroups[destGroupIndex] };
-
-      const [moved] = sourceGroup.cards.splice(source.index, 1);
-      destGroup.cards.splice(destination.index, 0, moved);
-
-      newGroups[sourceGroupIndex] = sourceGroup;
-      newGroups[destGroupIndex] = destGroup;
-
-      return newGroups;
-    });
+  function getAbsoluteProjectFilePath(relativePath: string) {
+    if (!selectedProject) return null;
+    const root = selectedProject.path.replace(/[\\/]+$/, '');
+    const rel = relativePath.replace(/^[\\/]+/, '');
+    const sep = root.includes('\\') ? '\\' : '/';
+    const relNative = rel.replace(/\//g, sep);
+    return `${root}${sep}${relNative}`;
   }
 
-  // Add a new commit group (like adding a list in Trello)
-  function addCommitGroup() {
-    const newId = `group-${Date.now()}`;
-    setCommitGroups((g) => [
-      ...g,
-      { id: newId, title: `Commit ${g.length}`, cards: [] },
-    ]);
-  }
+  function getPreviewKind(file: { path: string; status: string }) {
+    if (file.status === 'deleted') {
+      return undefined;
+    }
+    const ext = file.path.split('.').pop()?.toLowerCase() ?? '';
 
-  function updateGroupTitle(groupId: string, newTitle: string) {
-    setCommitGroups((groups) =>
-      groups.map((g) => (g.id === groupId ? { ...g, title: newTitle } : g))
-    );
-  }
-
-  function removeGroup(groupId: string) {
-    if (groupId === UNSTAGED_ID || groupId === STAGED_ID) return; // protect core lists
-    setCommitGroups((groups) => groups.filter((g) => g.id !== groupId));
-  }
-
-  // Commit a specific group
-  async function commitGroup(group: CommitGroup) {
-    if (!selectedProject) return;
-    if (group.cards.length === 0) {
-      setStatusMsg('No hay archivos en este grupo');
-      return;
+    if (imageExtensions.has(ext)) {
+      return 'image' as const;
+    }
+    if (videoExtensions.has(ext)) {
+      return 'video' as const;
+    }
+    if (audioExtensions.has(ext)) {
+      return 'audio' as const;
+    }
+    if (pdfExtensions.has(ext)) {
+      return 'pdf' as const;
     }
 
-    const files = group.cards.map((c) => c.file.path);
-
-    try {
-      setIsLoading(true);
-      setStatusMsg(`Staging ${files.length} archivos...`);
-
-      await invoke('stage_files', {
-        repoPath: selectedProject.path,
-        files,
-      });
-
-      setStatusMsg('Haciendo commit...');
-      const result: string = await invoke('commit_changes', {
-        repoPath: selectedProject.path,
-        message: group.title.trim(),
-        files: null, // already staged
-      });
-
-      setStatusMsg(`✅ ${result || 'Commit exitoso'}`);
-
-      // Refresh everything
-      await loadProject(selectedProject);
-    } catch (err: any) {
-      setStatusMsg(`Error en commit: ${err}`);
-    } finally {
-      setIsLoading(false);
-      setTimeout(() => setStatusMsg(''), 4000);
+    const binaryExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'mov', 'm4v', 'avi', 'mkv', 'mp3', 'wav', 'ogg', 'm4a', 'flac', 'pdf', 'zip', '7z', 'rar', 'dll', 'exe']);
+    if (binaryExtensions.has(ext)) {
+      return 'binary' as const;
     }
+
+    return undefined;
   }
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPreview = async () => {
+      if (!selectedFileForDiff) {
+        setPreview({ url: null });
+        return;
+      }
+
+      const kind = getPreviewKind(selectedFileForDiff);
+      if (!kind) {
+        setPreview({ kind: undefined, url: null });
+        return;
+      }
+
+      if (kind === 'binary') {
+        setPreview({ kind, url: null });
+        return;
+      }
+
+      const absolutePath = getAbsoluteProjectFilePath(selectedFileForDiff.path);
+      if (!absolutePath) {
+        setPreview({ kind: undefined, url: null });
+        return;
+      }
+
+      if (cancelled) return;
+      try {
+        const url = convertFileSrc(absolutePath);
+        setPreview({ kind, url });
+      } catch (error) {
+        console.error('preview load failed', error);
+        setPreview({ kind: undefined, url: null });
+      }
+    };
+
+    loadPreview();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFileForDiff, selectedProject]);
+
+  // Basic actions for the UI (simple git operations)
   async function stageAllUnstaged() {
     if (!selectedProject) return;
-    const unstaged = commitGroups.find(g => g.id === UNSTAGED_ID)?.cards.map(c => c.file.path) || [];
+    const unstaged = changes.filter((c) => !c.staged).map((c) => c.path);
     if (unstaged.length === 0) return;
 
     await invoke('stage_files', { repoPath: selectedProject.path, files: unstaged });
     await refreshStatus();
   }
 
-  async function unstageGroup(groupId: string) {
+  async function unstageAll() {
     if (!selectedProject) return;
-    const group = commitGroups.find((g) => g.id === groupId);
-    if (!group || group.cards.length === 0) return;
+    const staged = changes.filter((c) => c.staged).map((c) => c.path);
+    if (staged.length === 0) return;
 
-    const files = group.cards.map((c) => c.file.path);
-    await invoke('unstage_files', { repoPath: selectedProject.path, files });
+    await invoke('unstage_files', { repoPath: selectedProject.path, files: staged });
     await refreshStatus();
+  }
+
+  function startResize(key: ResizableColumnKey, event: React.MouseEvent<HTMLDivElement>) {
+    dragRef.current = {
+      key,
+      startX: event.clientX,
+      startWidth: columnWidths[key],
+    };
+    setIsResizing(true);
+  }
+
+  function renderResizeHandle(key: ResizableColumnKey) {
+    return (
+      <div
+        onMouseDown={(event) => startResize(key, event)}
+        className="w-1.5 h-full flex-shrink-0 cursor-col-resize bg-[#1a1a1d] hover:bg-violet-500/60 active:bg-violet-500/80 transition-colors"
+        title="Drag to resize"
+      />
+    );
+  }
+
+  function parseArgs(input: string) {
+    const matches = input.match(/"([^"]*)"|'([^']*)'|[^\s]+/g) ?? [];
+    return matches.map((token) => token.replace(/^['"]|['"]$/g, ''));
+  }
+
+  async function runGit(args: string[], label: string, refreshAfter = true) {
+    if (!selectedProject || args.length === 0) return;
+    setIsLoading(true);
+    setStatusMsg(`${label}...`);
+
+    try {
+      const result = await invoke<CommandResult>('run_git_command', {
+        repoPath: selectedProject.path,
+        args,
+      });
+
+      if (!result.success) {
+        throw new Error(result.stderr || result.stdout || `${label} failed`);
+      }
+
+      if (refreshAfter) {
+        await refreshStatus();
+      }
+
+      const detail = result.stdout || result.stderr || 'OK';
+      setStatusMsg(`✅ ${label}: ${detail.slice(0, 120)}`);
+    } catch (err: any) {
+      setStatusMsg(`Error ${label}: ${err?.message || err}`);
+    } finally {
+      setIsLoading(false);
+      setTimeout(() => setStatusMsg(''), 4000);
+    }
+  }
+
+  async function runPromptedGit(label: string, promptText: string, refreshAfter = true) {
+    const raw = prompt(promptText);
+    if (!raw?.trim()) return;
+    await runGit(parseArgs(raw.trim()), label, refreshAfter);
+  }
+
+  async function stageFile(path: string) {
+    if (!selectedProject) return;
+    await invoke('stage_files', { repoPath: selectedProject.path, files: [path] });
+    await refreshStatus();
+  }
+
+  async function unstageFile(path: string) {
+    if (!selectedProject) return;
+    await invoke('unstage_files', { repoPath: selectedProject.path, files: [path] });
+    await refreshStatus();
+  }
+
+  async function addRemote() {
+    if (!selectedProject) return;
+    const name = prompt('Remote name?');
+    if (!name?.trim()) return;
+    const url = prompt(`URL for remote ${name.trim()}?`);
+    if (!url?.trim()) return;
+    await invoke('add_remote', { repoPath: selectedProject.path, name: name.trim(), url: url.trim() });
+    await loadProject(selectedProject);
+  }
+
+  async function editRemote(remote: string) {
+    if (!selectedProject) return;
+    const currentUrl = await invoke<string>('get_remote_url', { repoPath: selectedProject.path, name: remote });
+    const nextUrl = prompt(`New URL for remote ${remote}?`, currentUrl);
+    if (!nextUrl?.trim() || nextUrl.trim() === currentUrl) return;
+    await invoke('set_remote_url', { repoPath: selectedProject.path, name: remote, url: nextUrl.trim() });
+    await loadProject(selectedProject);
+  }
+
+  async function addTag() {
+    if (!selectedProject) return;
+    const tag = prompt('New tag name?');
+    if (!tag?.trim()) return;
+    await invoke('create_tag', { repoPath: selectedProject.path, tag: tag.trim() });
+    await loadProject(selectedProject);
+  }
+
+  async function createStash() {
+    if (!selectedProject) return;
+    const message = prompt('Stash message? (optional)');
+    await invoke('create_stash', { repoPath: selectedProject.path, message: message?.trim() || null });
+    await loadProject(selectedProject);
+  }
+
+  async function discardFile(file: FileChange) {
+    if (!selectedProject) return;
+    if (!confirm(`Discard changes in ${file.path}?`)) return;
+    await invoke('discard_file_changes', { repoPath: selectedProject.path, filePath: file.path });
+    await refreshStatus();
+  }
+
+  async function deleteUntrackedFile(file: FileChange) {
+    if (!selectedProject) return;
+    if (!confirm(`Delete untracked file ${file.path}?`)) return;
+    await invoke('delete_untracked_file', { repoPath: selectedProject.path, filePath: file.path });
+    await refreshStatus();
+  }
+
+  async function gitFetchAll() {
+    await runGit(['fetch', '--all', '--prune'], 'fetch');
+  }
+
+  async function gitPull() {
+    await runGit(['pull', '--ff-only'], 'pull');
+  }
+
+  async function gitPush() {
+    await runGit(['push'], 'push');
+  }
+
+  async function gitMerge() {
+    const branch = prompt('Merge branch/ref into current branch?');
+    if (!branch?.trim()) return;
+    await runGit(['merge', branch.trim()], 'merge');
+  }
+
+  async function gitRebase() {
+    const upstream = prompt('Rebase current branch onto which branch/ref?');
+    if (!upstream?.trim()) return;
+    await runGit(['rebase', upstream.trim()], 'rebase');
+  }
+
+  async function gitCherryPick() {
+    const commit = prompt('Cherry-pick commit hash?');
+    if (!commit?.trim()) return;
+    await runGit(['cherry-pick', commit.trim()], 'cherry-pick');
+  }
+
+  async function gitRevert() {
+    const commit = prompt('Revert commit hash?');
+    if (!commit?.trim()) return;
+    await runGit(['revert', commit.trim()], 'revert');
+  }
+
+  async function gitReset() {
+    await runPromptedGit(
+      'reset',
+      'git reset args?\nExamples:\n--soft HEAD~1\n--mixed HEAD~1\n--hard origin/main'
+    );
+  }
+
+  async function gitClean() {
+    if (!confirm('Remove untracked files and directories? (git clean -fd)')) return;
+    await runGit(['clean', '-fd'], 'clean');
+  }
+
+  async function gitWorktree() {
+    await runPromptedGit(
+      'worktree',
+      'git worktree args?\nExamples:\nadd ../repo-hotfix hotfix\nlist\nremove ../repo-hotfix',
+      false,
+    );
+  }
+
+  async function gitSubmodule() {
+    await runPromptedGit(
+      'submodule',
+      'git submodule args?\nExamples:\nupdate --init --recursive\nforeach git status',
+      false,
+    );
+  }
+
+  async function gitCustom() {
+    await runPromptedGit(
+      'git',
+      'Git args?\nExamples:\nshow HEAD~1\nlog --oneline -20\nbranch -vv\nremote -v'
+    );
+  }
+
+  async function doCommit(message: string) {
+    if (!selectedProject || !message.trim()) return;
+    try {
+      setIsLoading(true);
+      setStatusMsg('Haciendo commit...');
+      const result: string = await invoke('commit_changes', {
+        repoPath: selectedProject.path,
+        message: message.trim(),
+      });
+      setStatusMsg(`✅ ${result || 'Commit realizado'}`);
+      await loadProject(selectedProject);
+      setTimeout(() => setStatusMsg(''), 3000);
+    } catch (err: any) {
+      setStatusMsg('Error commit: ' + err);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function doCommitAndPush(message: string) {
+    if (!selectedProject || !message.trim()) return;
+    try {
+      setIsLoading(true);
+      setStatusMsg('Commit...');
+      await invoke('commit_changes', {
+        repoPath: selectedProject.path,
+        message: message.trim(),
+      });
+      setStatusMsg('Push...');
+      await invoke('fetch', { repoPath: selectedProject.path }); // or better push, but we can call shell for full
+      // For simplicity, suggest user does push in terminal, or we can add a push command later
+      setStatusMsg('✅ Commit hecho. Usa el terminal para push o agrega comando push.');
+      await loadProject(selectedProject);
+    } catch (err: any) {
+      setStatusMsg('Error: ' + err);
+    } finally {
+      setIsLoading(false);
+      setTimeout(() => setStatusMsg(''), 4000);
+    }
+  }
+
+  async function fixUnsafeProject(proj: Project) {
+    try {
+      setIsLoading(true);
+      setStatusMsg('Adding safe.directory exception...');
+      await invoke('add_safe_directory', { path: proj.path });
+      setStatusMsg('Exception added.');
+      // update local project list
+      setProjects(prev => prev.map(p => p.id === proj.id ? {...p, is_unsafe: false} : p));
+      if (selectedProject?.id === proj.id) {
+        const updated = {...selectedProject, is_unsafe: false};
+        setSelectedProject(updated);
+        await loadProject(updated);
+      }
+    } catch (err: any) {
+      setStatusMsg('Error adding exception: ' + err);
+    } finally {
+      setIsLoading(false);
+      setTimeout(() => setStatusMsg(''), 3000);
+    }
   }
 
   function renderTag(tag: { name: string; color: string }) {
@@ -303,7 +659,21 @@ function App() {
     );
   }
 
-  const currentUnstaged = commitGroups.find((g) => g.id === UNSTAGED_ID)?.cards.length || 0;
+  function getProjectCardTone(project: Project) {
+    if (project.is_unsafe) {
+      return 'border-red-700/70 bg-red-950/30 hover:border-red-600';
+    }
+
+    if (project.git_status?.is_dirty) {
+      return 'border-amber-700/70 bg-amber-950/25 hover:border-amber-600';
+    }
+
+    if ((project.git_status?.ahead ?? 0) > 0) {
+      return 'border-sky-700/70 bg-sky-950/25 hover:border-sky-600';
+    }
+
+    return '';
+  }
 
   return (
     <div className="h-screen flex flex-col bg-[#18181b] text-[#e5e5e5] overflow-hidden">
@@ -313,7 +683,7 @@ function App() {
           <div className="flex items-center gap-2 text-xl font-semibold tracking-tight">
             <span className="text-2xl">🥄</span> Spoon
           </div>
-          <div className="text-xs px-2 py-0.5 bg-[#26262b] rounded text-zinc-400">Git × Trello</div>
+          <div className="text-xs px-2 py-0.5 bg-[#26262b] rounded text-zinc-400">Git + AI Terminal</div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -321,106 +691,39 @@ function App() {
             onClick={handleOpenDirectory}
             disabled={isLoading}
             className="flex items-center gap-2 px-4 py-1.5 rounded-md bg-white/10 hover:bg-white/15 active:bg-white/20 transition text-sm font-medium disabled:opacity-50"
+            title="Open directory"
           >
             <FolderOpen size={16} /> Abrir Directorio
           </button>
 
-          {selectedProject && (
-            <button
-              onClick={refreshStatus}
-              disabled={isLoading}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-white/5 hover:bg-white/10 text-sm"
-            >
-              <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} /> Refrescar
-            </button>
-          )}
+          <div className="flex items-center bg-[#1a1a1d] rounded-md border border-[#2a2a2f]">
+            {selectedProject && (
+              <button
+                onClick={refreshStatus}
+                disabled={isLoading}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm hover:bg-white/10 rounded-l-md rounded-r-md transition"
+                title="Refresh current project"
+              >
+                <RefreshCw size={15} className={isLoading ? 'animate-spin' : ''} /> Refresh
+              </button>
+            )}
+          </div>
         </div>
 
         <div className="text-xs text-zinc-500 min-w-[160px] text-right">{statusMsg}</div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Projects Sidebar */}
-        <div className="w-80 border-r border-[#2a2a2f] flex flex-col bg-[#1a1a1d] overflow-y-auto">
-          <div className="px-3 py-2 border-b border-[#2a2a2f]">
-            <div className="flex items-center gap-2 mb-1.5">
-              <div className="flex-1 relative">
-                <input
-                  type="text"
-                  value={projectFilter}
-                  onChange={(e) => setProjectFilter(e.target.value)}
-                  placeholder="Buscar proyectos (nombre, path o tag)..."
-                  className="w-full bg-[#111113] border border-[#2a2a2f] focus:border-violet-500 rounded-md pl-8 pr-3 py-1.5 text-sm placeholder:text-zinc-500 outline-none"
-                />
-                <Search size={15} className="absolute left-2.5 top-2.5 text-zinc-400" />
-              </div>
-              {projectFilter && (
-                <button
-                  onClick={() => setProjectFilter('')}
-                  className="text-xs px-2 py-1 bg-white/5 rounded hover:bg-white/10"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-            <div className="px-1 text-[10px] text-zinc-400 flex items-center justify-between">
-              <span>
-                PROYECTOS {projectFilter ? `(${filteredProjects.length}/${projects.length})` : `(${projects.length})`}
-              </span>
-              {isLoading && <RefreshCw size={12} className="animate-spin" />}
-            </div>
-          </div>
 
-          {filteredProjects.length === 0 && projects.length > 0 && (
-            <div className="p-4 text-sm text-zinc-400">No se encontraron proyectos con ese filtro.</div>
-          )}
-
-          {projects.length === 0 && (
-            <div className="p-6 text-sm text-zinc-400">
-              Haz clic en <span className="font-medium text-white">"Abrir Directorio"</span> para escanear tus proyectos locales.
-              <div className="mt-4 text-[11px]">
-                Spoon detectará automáticamente Unity, C#, Python, Rust, Node, Go y muchos más.
-              </div>
-            </div>
-          )}
-
-          <div className="p-3 space-y-2">
-            {filteredProjects.map((proj) => (
-              <div
-                key={proj.id}
-                onClick={() => loadProject(proj)}
-                className={`project-card cursor-pointer ${selectedProject?.id === proj.id ? 'ring-2 ring-violet-500' : ''}`}
-              >
-                <div className="font-medium text-base mb-1 truncate">{proj.name}</div>
-                <div className="repo-path mb-2">{proj.path}</div>
-
-                <div className="flex flex-wrap gap-1 mb-1.5">
-                  {proj.tags.slice(0, 4).map(renderTag)}
-                </div>
-
-                {proj.git_status && (
-                  <div className="flex items-center gap-2 text-[11px] text-zinc-400">
-                    <GitBranch size={13} /> {proj.git_status.current_branch || 'detached'}
-                    {proj.git_status.is_dirty && (
-                      <span className="text-amber-400">• {proj.git_status.changed_files} cambios</span>
-                    )}
-                    {proj.git_status.ahead > 0 && <span className="text-emerald-400">↑{proj.git_status.ahead}</span>}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Main Content: Kanban or welcome */}
-        <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Main Content */}
+        <div className="flex-1 h-full flex flex-col overflow-hidden">
           {!selectedProject ? (
             <div className="flex flex-col items-center justify-center h-full text-center px-8">
               <div className="text-7xl mb-6 opacity-80">🥄</div>
               <h1 className="text-4xl font-semibold tracking-tighter mb-2">Bienvenido a Spoon</h1>
               <p className="max-w-md text-zinc-400 mb-8">
-                Carga una carpeta con tus proyectos. Explora repos Git con una interfaz Kanban inspirada en Trello.
-                Agrupa tus cambios y haz commits atómicos visualmente.
+                Carga una carpeta con tus proyectos. Verás los archivos modificados, diffs, y una terminal PowerShell interactiva.
+                Inicia agentes de IA (Claude, Codex, Grok...) y usa el botón para inyectar prompts que analicen cambios, hagan commit en inglés y push.
               </p>
               <button
                 onClick={handleOpenDirectory}
@@ -432,206 +735,320 @@ function App() {
             </div>
           ) : (
             <>
-              {/* Project Header */}
-              <div className="h-12 border-b border-[#2a2a2f] flex items-center px-4 gap-4 bg-[#111113] flex-shrink-0">
-                <div>
+              {/* Project Header - minimal now, controls moved to top bar */}
+              <div className="border-b border-[#2a2a2f] px-4 py-2 bg-[#111113] flex-shrink-0">
+                <div className="flex items-center gap-4">
+                  <div>
                   <span className="font-semibold text-lg">{selectedProject.name}</span>
                   <span className="ml-3 text-xs text-zinc-500">{selectedProject.path}</span>
+                  </div>
+                  <div className="flex-1" />
+                  <div className="flex items-center gap-2 text-sm">
+                    {branches.find((b) => b.is_current) && (
+                      <div className="px-2.5 py-px rounded bg-emerald-900/60 text-emerald-400 flex items-center gap-1">
+                        <GitBranch size={14} /> {branches.find((b) => b.is_current)?.name}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="flex-1" />
-                <div className="flex items-center gap-2 text-sm">
-                  {branches.find((b) => b.is_current) && (
-                    <div className="px-2.5 py-px rounded bg-emerald-900/60 text-emerald-400 flex items-center gap-1">
-                      <GitBranch size={14} /> {branches.find((b) => b.is_current)?.name}
-                    </div>
-                  )}
-                  <button onClick={() => addCommitGroup()} className="px-3 py-1 rounded bg-white/5 hover:bg-white/10 text-xs flex items-center gap-1">
-                    <GitCommit size={14} /> Nueva lista de commit
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  <button onClick={gitFetchAll} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">fetch</button>
+                  <button onClick={gitPull} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">pull</button>
+                  <button onClick={gitPush} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">push</button>
+                  <button onClick={gitMerge} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">merge</button>
+                  <button onClick={gitRebase} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">rebase</button>
+                  <button onClick={gitCherryPick} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">pick</button>
+                  <button onClick={gitRevert} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">revert</button>
+                  <button onClick={gitReset} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">reset</button>
+                  <button onClick={gitClean} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">clean</button>
+                  <button onClick={gitWorktree} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">worktree</button>
+                  <button onClick={gitSubmodule} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">submodule</button>
+                  <button onClick={gitCustom} className="text-[10px] px-2 py-0.5 bg-violet-700/80 hover:bg-violet-700 rounded">git...</button>
+                </div>
+              </div>
+
+              {selectedProject?.is_unsafe && (
+                <div className="bg-red-900/30 border-b border-red-800 px-4 py-2 text-xs flex items-center justify-between text-red-300 flex-shrink-0">
+                  <span>⚠️ This repo is marked unsafe (dubious ownership detected). Some Git operations may fail.</span>
+                  <button 
+                    onClick={() => fixUnsafeProject(selectedProject)} 
+                    className="bg-red-700 hover:bg-red-600 px-3 py-1 rounded text-xs text-white font-medium"
+                  >
+                    Add safe.directory exception
                   </button>
                 </div>
-              </div>
+              )}
 
-              {/* Kanban + Diff area */}
-              <div className="flex flex-1 overflow-hidden bg-[#111113]">
-                <div className={`flex-1 overflow-x-auto ${selectedFileForDiff ? 'border-r border-[#2a2a2f]' : ''}`}>
-                  <DragDropContext onDragEnd={onDragEnd}>
-                    <div className="kanban-board">
-                      {commitGroups.map((group) => (
-                      <Droppable key={group.id} droppableId={group.id}>
-                        {(provided, snapshot) => (
-                          <div
-                            className={`kanban-list ${snapshot.isDraggingOver ? 'ring-1 ring-violet-500' : ''}`}
-                            ref={provided.innerRef}
-                            {...provided.droppableProps}
-                          >
-                            <div className="kanban-list-header">
-                              <div className="flex items-center gap-2 flex-1 min-w-0">
-                                {group.id === UNSTAGED_ID && <Play size={14} />}
-                                <input
-                                  value={group.title}
-                                  onChange={(e) => updateGroupTitle(group.id, e.target.value)}
-                                  className="bg-transparent font-semibold text-sm w-full focus:outline-none text-white placeholder:text-zinc-500"
-                                  placeholder={group.id === UNSTAGED_ID ? "Cambios sin stage" : "Título / primer línea del commit"}
-                                  disabled={group.id === UNSTAGED_ID || group.id === STAGED_ID}
-                                />
-                              </div>
+              {/* Main layout with projects column (left, with buscador) + files + right (diff+ps) */}
+              <div className="flex h-full flex-1 overflow-x-auto overflow-y-hidden bg-[#111113] relative">
+                {/* Side tab always visible for projects column toggle */}
+                <div 
+                  onClick={() => setShowProjectsSidebar(!showProjectsSidebar)}
+                  className="w-6 h-full bg-[#1a1a1d] border-r border-[#2a2a2f] flex items-center justify-center cursor-pointer hover:bg-white/5"
+                  title={showProjectsSidebar ? "Hide projects" : "Show projects"}
+                >
+                  <span className="text-[10px] -rotate-90 tracking-[2px] font-medium text-zinc-400">
+                    {showProjectsSidebar ? "HIDE" : "PROJECTS"}
+                  </span>
+                </div>
 
-                              <div className="flex items-center gap-1">
-                                <span className="text-[10px] px-1.5 py-px rounded bg-black/30">{group.cards.length}</span>
+                {showProjectsSidebar && (
+                  <div
+                    className="min-h-0 flex-shrink-0 border-r border-[#2a2a2f] bg-[#1a1a1d] flex flex-col h-full overflow-hidden"
+                    style={{ width: columnWidths.projects }}
+                  >
+                    <div className="p-3 border-b flex-shrink-0">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-semibold">PROJECTS</span>
+                        <div className="flex items-center gap-2">
+                          <label className="text-[10px] flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" checked={autoHideProjects} onChange={(e) => setAutoHideProjects(e.target.checked)} /> autohide
+                          </label>
+                          <button onClick={() => setShowProjectsSidebar(false)} className="text-xs px-1.5 py-0.5 bg-white/10 rounded hover:bg-white/20">hide</button>
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={projectFilter}
+                          onChange={(e) => setProjectFilter(e.target.value)}
+                          placeholder="Buscar proyectos..."
+                          className="w-full bg-[#111113] border border-[#2a2a2f] focus:border-violet-500 rounded-md pl-8 pr-3 py-1.5 text-sm placeholder:text-zinc-500"
+                        />
+                        <Search size={15} className="absolute left-2.5 top-2.5 text-zinc-400" />
+                      </div>
+                      <div className="px-1 text-[10px] text-zinc-400 mt-1">
+                        {projectFilter ? `(${filteredProjects.length}/${projects.length})` : `(${projects.length})`}
+                      </div>
+                    </div>
 
-                                {group.id !== UNSTAGED_ID && group.id !== STAGED_ID && (
-                                  <button onClick={() => removeGroup(group.id)} className="opacity-60 hover:opacity-100 p-0.5">
-                                    <X size={13} />
-                                  </button>
-                                )}
+                    {filteredProjects.length === 0 && projects.length > 0 && (
+                      <div className="p-4 text-sm text-zinc-400 flex-shrink-0">No matches.</div>
+                    )}
 
-                                {/* Main commit action is in the textarea composer below.
-                                    Only show quick unstage for the staged list in header. */}
-                                {group.id === STAGED_ID && group.cards.length > 0 && (
-                                  <button onClick={() => unstageGroup(group.id)} className="ml-1 text-[10px] bg-orange-900/70 hover:bg-orange-800 px-2 py-px rounded">
-                                    UNSTAGE
-                                  </button>
-                                )}
-                              </div>
+                    <div className="min-h-0 flex-1 overflow-auto p-3 space-y-2">
+                      {filteredProjects.map((proj) => (
+                        <div
+                          key={proj.id}
+                          onClick={() => {
+                            loadProject(proj);
+                            if (autoHideProjects) setShowProjectsSidebar(false);
+                          }}
+                          className={`project-card cursor-pointer text-xs ${getProjectCardTone(proj)} ${selectedProject?.id === proj.id ? 'ring-2 ring-violet-500' : ''}`}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="font-medium truncate">{proj.name}</div>
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              {proj.git_status?.is_dirty && (
+                                <span className="tag" style={{ background: '#92400e', color: '#fef3c7' }}>
+                                  dirty {proj.git_status.changed_files}
+                                </span>
+                              )}
+                              {(proj.git_status?.ahead ?? 0) > 0 && (
+                                <span className="tag" style={{ background: '#075985', color: '#e0f2fe' }}>
+                                  push {proj.git_status?.ahead}
+                                </span>
+                              )}
                             </div>
-
-                            <div className="kanban-list-content" ref={provided.innerRef}>
-                              {group.cards.map((card, index) => (
-                                <Draggable key={card.id} draggableId={card.id} index={index}>
-                                  {(prov, snap) => (
-                                    <div
-                                      ref={prov.innerRef}
-                                      {...prov.draggableProps}
-                                      {...prov.dragHandleProps}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        selectFileForDiff(card.file);
-                                      }}
-                                      className={`kanban-card ${snap.isDragging ? 'shadow-2xl ring-1 ring-violet-400' : ''} ${selectedFileForDiff?.path === card.file.path ? 'ring-2 ring-violet-400 !border-violet-500' : ''}`}
-                                      title="Click para ver diff"
-                                    >
-                                      <div className="font-mono text-[11px] text-emerald-400 truncate">{card.file.path}</div>
-                                      <div className="text-[10px] text-zinc-400 flex justify-between mt-0.5">
-                                        <span>{card.file.status}</span>
-                                        {card.file.staged && <span className="text-sky-400">staged</span>}
-                                      </div>
-                                    </div>
-                                  )}
-                                </Draggable>
-                              ))}
-                              {provided.placeholder}
-                            </div>
-
-                            {/* Commit message composer - place to write the commit */}
-                            {(group.cards.length > 0 || group.id !== UNSTAGED_ID) && (
-                              <div className="p-2 border-t border-[#2a2a2f] bg-[#1a1a1d]">
-                                <div className="text-[9px] text-zinc-400 mb-0.5 px-0.5">Mensaje de commit</div>
-                                <textarea
-                                  value={group.title}
-                                  onChange={(e) => updateGroupTitle(group.id, e.target.value)}
-                                  placeholder="Escribe aquí el mensaje del commit..."
-                                  className="w-full bg-[#111113] border border-[#2a2a2f] focus:border-violet-500 rounded p-1.5 text-xs font-mono resize-y min-h-[46px] leading-snug"
-                                />
-                                {group.cards.length > 0 && group.id !== UNSTAGED_ID && (
-                                  <button
-                                    onClick={() => commitGroup(group)}
-                                    className="mt-1 w-full text-xs py-1 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 rounded font-medium"
-                                  >
-                                    COMMIT {group.cards.length} archivos → “{group.title.slice(0, 28)}{group.title.length > 28 ? '…' : ''}”
-                                  </button>
-                                )}
-                              </div>
-                            )}
-
-                            {group.id === UNSTAGED_ID && currentUnstaged > 0 && (
-                              <div className="p-2 border-t border-[#2a2a2f]">
-                                <button onClick={stageAllUnstaged} className="w-full text-xs py-1 bg-white/5 hover:bg-white/10 rounded">
-                                  Stage todo
+                          </div>
+                          <div className="repo-path text-[10px] mb-1 truncate">{proj.path}</div>
+                          <div className="flex gap-1 items-center">
+                            {proj.tags.slice(0,3).map(renderTag)}
+                            {proj.is_unsafe && (
+                              <>
+                                <span className="tag" style={{background: '#7f1d1d', color: '#fecaca'}}>unsafe</span>
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); fixUnsafeProject(proj); }}
+                                  className="text-[10px] px-1 py-0 bg-red-700 hover:bg-red-600 text-white rounded"
+                                  title={`Run: git config --global --add safe.directory ${proj.path.replace(/\\/g, '/')}`}
+                                >
+                                  fix
                                 </button>
-                              </div>
+                              </>
                             )}
                           </div>
-                        )}
-                      </Droppable>
-                    ))}
-
-                    {/* Add list button as last column */}
-                    <div
-                      onClick={addCommitGroup}
-                      className="kanban-list flex items-center justify-center text-sm cursor-pointer bg-[#1a1a1d] border border-dashed border-[#3a3a40] hover:border-violet-500/50 min-h-[120px] text-zinc-400"
-                    >
-                      + Añadir grupo de commit
+                        </div>
+                      ))}
                     </div>
                   </div>
-                </DragDropContext>
-              </div>
+                )}
+                {showProjectsSidebar && renderResizeHandle('projects')}
 
-              {/* Diff viewer sidebar (appears when a file card is clicked) */}
-              {selectedFileForDiff && (
-                <DiffViewer
-                  filePath={selectedFileForDiff.path}
-                  staged={selectedFileForDiff.staged}
-                  diff={currentDiff}
-                  onStage={stageFromDiff}
-                  onUnstage={unstageFromDiff}
-                  onClose={closeDiff}
-                  isLoading={diffLoading}
-                />
-              )}
-            </div>
+                {/* Refs column stays visible even when projects are hidden */}
+                <div
+                  className="min-h-0 flex-shrink-0 border-r border-[#2a2a2f] bg-[#1a1a1d] flex flex-col h-full overflow-hidden text-sm"
+                  style={{ width: columnWidths.refs }}
+                >
+                  <div className="min-h-0 flex-1 overflow-auto p-2">
+                    <div className="p-2 text-xs font-semibold text-zinc-400 border-b border-[#2a2a2f]">LOCAL BRANCHES</div>
+                    <div className="p-1 space-y-0.5">
+                      {branches.filter(b => !b.is_remote).length === 0 && <div className="px-2 py-1 text-xs text-zinc-500">No local branches</div>}
+                      {branches.filter(b => !b.is_remote).map((b) => (
+                        <div key={b.name} className={`group flex items-center justify-between px-2 py-1 rounded text-xs ${b.is_current ? 'bg-emerald-900/50 text-emerald-300 font-medium' : 'hover:bg-white/5'}`}>
+                          <span onClick={async () => {
+                            if (!selectedProject || b.is_current) return;
+                            await invoke('checkout_branch', { repoPath: selectedProject.path, branch: b.name });
+                            await loadProject(selectedProject);
+                          }} className="cursor-pointer flex-1 truncate">{b.name}</span>
+                          {!b.is_current && (
+                            <button onClick={async (e) => { e.stopPropagation(); if (!selectedProject) return; if (confirm(`Delete branch ${b.name}?`)) { await invoke('delete_local_branch', {repoPath: selectedProject.path, branch: b.name}); await loadProject(selectedProject); } }} className="opacity-60 group-hover:opacity-100 text-red-400 hover:text-red-300 px-1">✕</button>
+                          )}
+                        </div>
+                      ))}
+                      <button onClick={async () => {
+                        if (!selectedProject) return;
+                        const name = prompt('New branch name?');
+                        if (name) { await invoke('create_branch', {repoPath: selectedProject.path, branch: name}); await loadProject(selectedProject); }
+                      }} className="text-xs text-violet-400 hover:text-violet-300 mt-1 block">+ New branch</button>
+                    </div>
 
-            {/* Bottom panels: Branches + Visual Commit Graph (Fork-style thread) */}
-            <div className="h-52 border-t border-[#2a2a2f] bg-[#0f0f11] flex overflow-hidden flex-shrink-0 text-sm">
-              {/* Branches (quick switch) */}
-              <div className="w-72 border-r border-[#2a2a2f] p-3 overflow-auto flex-shrink-0">
-                <div className="uppercase tracking-[1px] text-[10px] font-semibold text-zinc-400 mb-2 flex items-center gap-2">
-                  <GitBranch size={13} /> BRANCHES
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {branches.slice(0, 18).map((b) => (
-                    <button
-                      key={b.name}
-                      onClick={async () => {
-                        if (!selectedProject || b.is_current) return;
-                        await invoke('checkout_branch', { repoPath: selectedProject.path, branch: b.name });
-                        await loadProject(selectedProject);
-                      }}
-                      className={`px-2 py-0.5 rounded text-xs border ${b.is_current ? 'bg-emerald-900/70 border-emerald-600' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
-                      title={b.is_remote ? 'remote' : 'local'}
-                    >
-                      {b.name}
-                    </button>
-                  ))}
-                </div>
-                <div className="text-[9px] text-zinc-500 mt-2">Click para checkout</div>
-              </div>
+                    <div className="p-2 text-xs font-semibold text-zinc-400 border-t border-b border-[#2a2a2f]">REMOTES</div>
+                    <div className="p-1 space-y-0.5">
+                      <button onClick={addRemote} className="text-xs text-violet-400 hover:text-violet-300 mb-1 block">+ Add remote</button>
+                      {remotes.length === 0 ? <div className="px-2 py-1 text-xs text-zinc-500">No remotes</div> : remotes.map(r => (
+                        <div key={r} className="group flex items-center justify-between px-2 py-1 rounded text-xs hover:bg-white/5">
+                          <span>{r}</span>
+                          <div className="flex items-center gap-1 opacity-60 group-hover:opacity-100">
+                            <button onClick={async (e) => { e.stopPropagation(); await editRemote(r); }} className="text-[10px] text-sky-400">edit</button>
+                            <button onClick={async (e) => { e.stopPropagation(); if (!selectedProject || !confirm(`Remove remote ${r}?`)) return; await invoke('delete_remote', {repoPath: selectedProject.path, remote: r}); await loadProject(selectedProject); }} className="text-red-400 px-1">✕</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
 
-              {/* Visual Commit History - Fork style thread/graph */}
-              <div className="flex-1 overflow-hidden">
-                <div className="px-2 pt-1 pb-0.5 uppercase tracking-[1px] text-[10px] font-semibold text-zinc-400 flex items-center gap-2">
-                  <GitCommit size={13} /> HISTORY (visual graph)
+                    <div className="p-2 text-xs font-semibold text-zinc-400 border-t border-b border-[#2a2a2f]">TAGS</div>
+                    <div className="p-1 space-y-0.5">
+                      <button onClick={addTag} className="text-xs text-violet-400 hover:text-violet-300 mb-1 block">+ New tag</button>
+                      {tags.length === 0 && <div className="px-2 py-1 text-xs text-zinc-500">No tags</div>}
+                      {tags.map((t, i) => (
+                        <div key={i} className="group flex items-center justify-between px-2 py-0.5 text-xs hover:bg-white/5 rounded cursor-pointer truncate">
+                          <span onClick={async () => {
+                            if (!selectedProject) return;
+                            if (confirm(`Checkout tag ${t} (detached)?`)) {
+                              await invoke('checkout_branch', {repoPath: selectedProject.path, branch: t});
+                              await loadProject(selectedProject);
+                            }
+                          }}>{t}</span>
+                          <button onClick={async (e) => { e.stopPropagation(); if (!selectedProject || !confirm(`Delete tag ${t}?`)) return; await invoke('delete_tag', {repoPath: selectedProject.path, tag: t}); await loadProject(selectedProject); }} className="opacity-60 group-hover:opacity-100 text-red-400 px-1">✕</button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="p-2 text-xs font-semibold text-zinc-400 border-t border-b border-[#2a2a2f]">STASHES</div>
+                    <div className="p-1 space-y-0.5">
+                      <button onClick={createStash} className="text-xs text-violet-400 hover:text-violet-300 mb-1 block">+ Create stash</button>
+                      {stashes.length === 0 && <div className="px-2 py-1 text-xs text-zinc-500">No stashes</div>}
+                      {stashes.map((s, i) => (
+                        <div key={i} className="group flex items-center justify-between px-2 py-0.5 text-xs hover:bg-white/5 rounded cursor-pointer truncate">
+                          <span title={s}>{s}</span>
+                          <div className="flex gap-1 opacity-60 group-hover:opacity-100">
+                            <button onClick={async (e) => { e.stopPropagation(); if (!selectedProject) return; await invoke('stash_apply', {repoPath: selectedProject.path, stash_ref: s.split(' ')[0]}); await loadProject(selectedProject); }} className="text-[10px] text-blue-400">apply</button>
+                            <button onClick={async (e) => { e.stopPropagation(); if (!selectedProject) return; await invoke('stash_pop', {repoPath: selectedProject.path, stash_ref: s.split(' ')[0]}); await loadProject(selectedProject); }} className="text-[10px] text-green-400">pop</button>
+                            <button onClick={async (e) => { e.stopPropagation(); if (!selectedProject || !confirm('Drop stash?')) return; await invoke('stash_drop', {repoPath: selectedProject.path, stash_ref: s.split(' ')[0]}); await loadProject(selectedProject); }} className="text-[10px] text-red-400">drop</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-                <div className="h-[calc(100%-18px)]">
-                  <CommitGraph
-                    commits={commits}
-                    branches={branches}
-                    currentBranch={branches.find((b) => b.is_current)?.name || null}
-                    onCheckout={async (commit) => {
-                      if (!selectedProject) return;
-                      // Checkout the specific commit (detached HEAD)
-                      try {
-                        await invoke('checkout_branch', { repoPath: selectedProject.path, branch: commit.hash });
-                        await loadProject(selectedProject);
-                        setStatusMsg(`Checked out ${commit.short_hash}`);
-                        setTimeout(() => setStatusMsg(''), 2000);
-                      } catch (e: any) {
-                        setStatusMsg('Error checkout: ' + e);
-                      }
-                    }}
-                  />
+                {renderResizeHandle('refs')}
+
+                {/* Files column */}
+                <div
+                  className="h-full flex-shrink-0 border-r border-[#2a2a2f] bg-[#1a1a1d] flex flex-col overflow-hidden"
+                  style={{ width: columnWidths.files }}
+                >
+                  <div className="px-3 py-2 text-xs font-semibold text-zinc-400 flex items-center justify-between border-b border-[#2a2a2f]">
+                    MODIFIED FILES ({changes.length})
+                    <div className="flex gap-1">
+                      <button onClick={createStash} className="px-2 py-0.5 text-[10px] bg-violet-700/80 hover:bg-violet-700 rounded">Stash all</button>
+                      <button onClick={stageAllUnstaged} className="px-2 py-0.5 text-[10px] bg-emerald-700/80 hover:bg-emerald-700 rounded">Stage all</button>
+                      <button onClick={unstageAll} className="px-2 py-0.5 text-[10px] bg-orange-700/80 hover:bg-orange-700 rounded">Unstage all</button>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 overflow-auto p-2 text-sm custom-scrollbar space-y-1">
+                    {changes.length === 0 && <div className="p-4 text-xs text-zinc-400">No changes.</div>}
+                    {changes.map((file) => (
+                      <div
+                        key={file.path}
+                        onClick={() => {
+                          const sel = { path: file.path, staged: file.staged, status: file.status };
+                          setSelectedFileForDiff(sel);
+                          loadFileDiff(file.path, file.staged);
+                        }}
+                        className={`p-2 rounded text-xs flex justify-between cursor-pointer ${selectedFileForDiff?.path === file.path ? 'bg-violet-500/20 ring-1 ring-violet-500' : 'hover:bg-white/5'} ${file.status === 'deleted' ? 'opacity-60' : ''}`}
+                      >
+                        <div className={`font-mono truncate pr-2 ${file.status === 'deleted' ? 'line-through text-zinc-500' : file.status === 'untracked' ? 'text-emerald-300' : file.status === 'modified' ? 'text-amber-200' : 'text-zinc-200'}`}>
+                          {file.path}
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <span className={`px-1 rounded ${
+                            file.status === 'deleted'
+                              ? 'bg-zinc-800 text-zinc-300'
+                              : file.status === 'untracked'
+                                ? 'bg-emerald-900 text-emerald-300'
+                                : file.status === 'modified'
+                                  ? 'bg-amber-800 text-amber-300'
+                                  : file.staged
+                                    ? 'bg-sky-800 text-sky-300'
+                                    : 'bg-white/10 text-zinc-300'
+                          }`}>{file.status}</span>
+                          <button onClick={(e) => { e.stopPropagation(); file.staged ? unstageFile(file.path) : stageFile(file.path); }} className="px-1.5 bg-white/10 rounded text-[10px]">{file.staged ? 'Un' : 'Stage'}</button>
+                          {file.status === 'untracked' ? (
+                            <button onClick={(e) => { e.stopPropagation(); deleteUntrackedFile(file); }} className="px-1.5 bg-red-900/60 text-red-300 rounded text-[10px]">Delete</button>
+                          ) : (
+                            <button onClick={(e) => { e.stopPropagation(); discardFile(file); }} className="px-1.5 bg-red-900/60 text-red-300 rounded text-[10px]">Discard</button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Quick commit */}
+                  <div className="p-3 border-t border-[#2a2a2f] bg-[#1a1a1d]">
+                    <div className="text-[10px] mb-1 text-zinc-400">Commit message</div>
+                    <textarea id="quick-commit-msg" className="w-full h-14 bg-[#111113] border border-[#2a2a2f] rounded p-2 text-xs font-mono" placeholder="feat: ..." />
+                    <div className="flex gap-2 mt-2">
+                      <button onClick={() => { const ta = document.getElementById('quick-commit-msg') as HTMLTextAreaElement | null; if (ta?.value) doCommit(ta.value); }} className="flex-1 py-1 text-xs bg-emerald-600 hover:bg-emerald-500 rounded">Commit</button>
+                      <button onClick={() => { const ta = document.getElementById('quick-commit-msg') as HTMLTextAreaElement | null; if (ta?.value) doCommitAndPush(ta.value); }} className="flex-1 py-1 text-xs bg-white/10 hover:bg-white/15 rounded">Commit &amp; Push</button>
+                    </div>
+                  </div>
                 </div>
+                {renderResizeHandle('files')}
+
+                {/* Diff center + PowerShell right */}
+                <div className="flex-1 min-w-0 h-full flex overflow-hidden">
+                  <div
+                    className="overflow-auto bg-[#111113] flex-shrink-0"
+                    style={{ width: columnWidths.diff }}
+                  >
+                    {selectedFileForDiff ? (
+                      <DiffViewer
+                        filePath={selectedFileForDiff.path}
+                        staged={selectedFileForDiff.staged}
+                        status={selectedFileForDiff.status}
+                        diff={currentDiff}
+                        onStage={stageFromDiff}
+                        onUnstage={unstageFromDiff}
+                        onClose={closeDiff}
+                        isLoading={diffLoading}
+                        previewKind={preview.kind}
+                        previewUrl={preview.url}
+                      />
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-zinc-400 text-sm p-4 text-center">Click a file to view diff</div>
+                    )}
+                  </div>
+                  {renderResizeHandle('diff')}
+                  <div
+                    className="h-full min-w-[20rem] flex-1 border-l border-[#2a2a2f] bg-[#111113]"
+                  >
+                    <AITerminal repoPath={selectedProject.path} cliCommands={cliCommands} />
+                  </div>
+                </div>
+
               </div>
-            </div>
             </>
           )}
         </div>
@@ -646,4 +1063,3 @@ function App() {
 }
 
 export default App;
-
