@@ -3,13 +3,18 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::Command as StdCommand;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use tauri::{AppHandle, Emitter, State};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 #[cfg(windows)]
 use winreg::RegKey;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[derive(Default)]
 pub struct TerminalState {
@@ -22,10 +27,17 @@ pub struct TerminalState {
 /// Resolve the best PowerShell executable, preferring the latest PowerShell 7+ (pwsh).
 /// If not found, attempts to install it via winget (Windows only).
 fn resolve_powershell() -> Result<String, String> {
+    static POWERSHELL_EXE: OnceLock<String> = OnceLock::new();
+    if let Some(cached) = POWERSHELL_EXE.get() {
+        return Ok(cached.clone());
+    }
+
     // 1. Check if "pwsh" (PowerShell 7+) is already in PATH
-    if let Ok(output) = StdCommand::new("pwsh").arg("--version").output() {
+    if let Ok(output) = system_command("pwsh").arg("--version").output() {
         if output.status.success() {
-            return Ok("pwsh".to_string());
+            let resolved = "pwsh".to_string();
+            let _ = POWERSHELL_EXE.set(resolved.clone());
+            return Ok(resolved);
         }
     }
 
@@ -40,13 +52,15 @@ fn resolve_powershell() -> Result<String, String> {
 
     for p in &candidates {
         if Path::new(p).exists() {
-            return Ok(p.clone());
+            let resolved = p.clone();
+            let _ = POWERSHELL_EXE.set(resolved.clone());
+            return Ok(resolved);
         }
     }
 
     // 3. Not found — try to install the latest via winget
     // This requires winget (available on modern Windows 10/11)
-    if let Ok(status) = StdCommand::new("winget")
+    if let Ok(status) = system_command("winget")
         .args([
             "install",
             "--id",
@@ -64,15 +78,31 @@ fn resolve_powershell() -> Result<String, String> {
             // Re-scan after install
             for p in &candidates {
                 if Path::new(p).exists() {
-                    return Ok(p.clone());
+                    let resolved = p.clone();
+                    let _ = POWERSHELL_EXE.set(resolved.clone());
+                    return Ok(resolved);
                 }
             }
             // PATH might not be updated until restart, fallback to name
-            return Ok("pwsh".to_string());
+            let resolved = "pwsh".to_string();
+            let _ = POWERSHELL_EXE.set(resolved.clone());
+            return Ok(resolved);
         }
     }
 
     Err("PowerShell 7 (pwsh) was not found and could not be auto-installed.\nPlease install it manually: https://github.com/PowerShell/PowerShell/releases".to_string())
+}
+
+#[cfg(windows)]
+fn system_command(program: &str) -> StdCommand {
+    let mut command = StdCommand::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
+
+#[cfg(not(windows))]
+fn system_command(program: &str) -> StdCommand {
+    StdCommand::new(program)
 }
 
 #[cfg(windows)]
@@ -116,7 +146,7 @@ fn dedupe_path(parts: Vec<String>) -> String {
 }
 
 #[cfg(windows)]
-fn build_shell_env() -> HashMap<String, String> {
+fn build_shell_env_inner() -> HashMap<String, String> {
     let mut env_map: HashMap<String, String> = std::env::vars().collect();
     let machine_env = read_registry_env(
         RegKey::predef(HKEY_LOCAL_MACHINE),
@@ -153,8 +183,13 @@ fn build_shell_env() -> HashMap<String, String> {
 }
 
 #[cfg(not(windows))]
-fn build_shell_env() -> HashMap<String, String> {
+fn build_shell_env_inner() -> HashMap<String, String> {
     std::env::vars().collect()
+}
+
+fn build_shell_env() -> HashMap<String, String> {
+    static SHELL_ENV: OnceLock<HashMap<String, String>> = OnceLock::new();
+    SHELL_ENV.get_or_init(build_shell_env_inner).clone()
 }
 
 #[tauri::command]

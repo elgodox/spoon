@@ -19,6 +19,15 @@ import './App.css';
 // Constants removed - no longer using Trello-style groups
 
 type ResizableColumnKey = 'projects' | 'refs' | 'files' | 'diff';
+type CachedProjectData = {
+  branches: GitBranchType[];
+  remotes: string[];
+  changes: FileChange[];
+  tags: string[];
+  stashes: string[];
+  gitStatus: GitStatus;
+  savedAt: number;
+};
 
 const DEFAULT_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   projects: 320,
@@ -33,6 +42,26 @@ const MIN_COLUMN_WIDTHS: Record<ResizableColumnKey, number> = {
   files: 280,
   diff: 360,
 };
+
+const LAST_DIR_KEY = 'lastDir';
+const LAST_PROJECT_KEY = 'lastProjectPath';
+const PROJECT_FILTER_KEY = 'projectFilter';
+const SCAN_CACHE_PREFIX = 'scanCache:';
+const PROJECT_CACHE_PREFIX = 'projectCache:';
+
+function readJson<T>(key: string): T | null {
+  const raw = localStorage.getItem(key);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeJson(key: string, value: unknown) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
 
 function App() {
   const imageExtensions = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg']);
@@ -61,6 +90,7 @@ function App() {
     }
   });
   const dragRef = useRef<{ key: ResizableColumnKey; startX: number; startWidth: number } | null>(null);
+  const projectDataCacheRef = useRef<Record<string, CachedProjectData>>({});
   const [isResizing, setIsResizing] = useState(false);
 
 
@@ -80,10 +110,10 @@ function App() {
 
 
   // Remember last directory and filter
-  const [_lastDir, setLastDir] = useState(() => localStorage.getItem('lastDir') || '');
+  const [_lastDir, setLastDir] = useState(() => localStorage.getItem(LAST_DIR_KEY) || '');
 
   useEffect(() => {
-    localStorage.setItem('projectFilter', projectFilter);
+    localStorage.setItem(PROJECT_FILTER_KEY, projectFilter);
   }, [projectFilter]);
 
   useEffect(() => {
@@ -131,33 +161,131 @@ function App() {
     };
   }, [isResizing]);
 
+  function getProjectCache(repoPath: string) {
+    const inMemory = projectDataCacheRef.current[repoPath];
+    if (inMemory) return inMemory;
+    const persisted = readJson<CachedProjectData>(`${PROJECT_CACHE_PREFIX}${repoPath}`);
+    if (persisted) {
+      projectDataCacheRef.current[repoPath] = persisted;
+    }
+    return persisted;
+  }
+
+  function setProjectCache(repoPath: string, data: CachedProjectData) {
+    projectDataCacheRef.current[repoPath] = data;
+    writeJson(`${PROJECT_CACHE_PREFIX}${repoPath}`, data);
+  }
+
+  function applyProjectData(project: Project, data: CachedProjectData) {
+    setBranches(data.branches);
+    setRemotes(data.remotes);
+    setChanges(data.changes);
+    setTags(data.tags);
+    setStashes(data.stashes);
+    setProjects((prev) => prev.map((item) => (
+      item.id === project.id ? { ...item, git_status: data.gitStatus } : item
+    )));
+    setSelectedProject((prev) => (
+      prev?.id === project.id ? { ...prev, git_status: data.gitStatus } : prev
+    ));
+  }
+
+  async function fetchProjectData(project: Project) {
+    const [brs, rms, chgs, tgs, sts, gitStatus] = await Promise.all([
+      invoke<GitBranchType[]>('get_branches', { repoPath: project.path }),
+      invoke<string[]>('get_remotes', { repoPath: project.path }),
+      invoke<FileChange[]>('get_file_changes', { repoPath: project.path }),
+      invoke<string[]>('get_tags', { repoPath: project.path }),
+      invoke<string[]>('get_stashes', { repoPath: project.path }),
+      invoke<GitStatus>('get_project_status', { repoPath: project.path }),
+    ]);
+
+    const data: CachedProjectData = {
+      branches: brs,
+      remotes: rms,
+      changes: chgs,
+      tags: tgs,
+      stashes: sts,
+      gitStatus,
+      savedAt: Date.now(),
+    };
+
+    applyProjectData(project, data);
+    setProjectCache(project.path, data);
+    return data;
+  }
+
+  async function refreshProjects(rootPath: string, silent = false) {
+    if (!silent) {
+      setIsLoading(true);
+      setStatusMsg('Escaneando proyectos...');
+    }
+
+    try {
+      const scanned: Project[] = await invoke('scan_directory', { rootPath });
+      setProjects(scanned);
+      writeJson(`${SCAN_CACHE_PREFIX}${rootPath}`, scanned);
+      localStorage.setItem(LAST_DIR_KEY, rootPath);
+      setLastDir(rootPath);
+
+      const preferredProjectPath = localStorage.getItem(LAST_PROJECT_KEY);
+      const currentProjectPath = selectedProject?.path;
+      const nextProject =
+        scanned.find((project) => project.path === currentProjectPath) ??
+        scanned.find((project) => project.path === preferredProjectPath) ??
+        scanned[0];
+
+      if (nextProject) {
+        void loadProject(nextProject, { preferCache: true, backgroundRefresh: true });
+      }
+
+      if (!silent) {
+        setStatusMsg(`Encontrados ${scanned.length} repositorios Git`);
+        setTimeout(() => setStatusMsg(''), 2500);
+      }
+    } catch (err) {
+      console.error(err);
+      if (!silent) {
+        try {
+          localStorage.removeItem(LAST_DIR_KEY);
+        } catch {}
+      }
+      if (!silent) {
+        setStatusMsg(`Error: ${err}`);
+      }
+    } finally {
+      if (!silent) {
+        setIsLoading(false);
+      }
+    }
+  }
+
   // Auto-load last directory on startup
   useEffect(() => {
-    const savedDir = localStorage.getItem('lastDir');
-    if (savedDir && projects.length === 0) {
-      (async () => {
-        try {
-          setIsLoading(true);
-          setStatusMsg('Cargando último directorio...');
-          const scanned: Project[] = await invoke('scan_directory', { rootPath: savedDir });
-          setProjects(scanned);
-          setLastDir(savedDir);
-          if (scanned.length > 0) {
-            // auto-select first project so the inner view + shell starts immediately
-            setTimeout(() => loadProject(scanned[0]), 0);
-          }
-        } catch (err) {
-          console.error(err);
-          // Clear bad lastDir so it doesn't hang on every future startup
-          try { localStorage.removeItem('lastDir'); } catch {}
-        } finally {
-          setIsLoading(false);
-          setStatusMsg('');
-        }
-      })();
-    }
-    const savedFilter = localStorage.getItem('projectFilter');
+    const savedDir = localStorage.getItem(LAST_DIR_KEY);
+    const savedFilter = localStorage.getItem(PROJECT_FILTER_KEY);
     if (savedFilter) setProjectFilter(savedFilter);
+
+    if (savedDir && projects.length === 0) {
+      const cachedProjects = readJson<Project[]>(`${SCAN_CACHE_PREFIX}${savedDir}`);
+      const preferredProjectPath = localStorage.getItem(LAST_PROJECT_KEY);
+
+      if (cachedProjects?.length) {
+        setProjects(cachedProjects);
+        setLastDir(savedDir);
+        const initialProject =
+          cachedProjects.find((project) => project.path === preferredProjectPath) ??
+          cachedProjects[0];
+        if (initialProject) {
+          void loadProject(initialProject, { preferCache: true, backgroundRefresh: true });
+        }
+        void refreshProjects(savedDir, true);
+        return;
+      }
+
+      setStatusMsg('Cargando último directorio...');
+      void refreshProjects(savedDir);
+    }
   }, []);
 
 
@@ -173,51 +301,44 @@ function App() {
 
       if (!selected || Array.isArray(selected)) return;
 
-      setIsLoading(true);
-      setStatusMsg('Escaneando proyectos...');
-
-      const scanned: Project[] = await invoke('scan_directory', { rootPath: selected });
-      setProjects(scanned);
       const pathStr = selected as string;
-      localStorage.setItem('lastDir', pathStr);
-      setLastDir(pathStr);
-
-      setStatusMsg(`Encontrados ${scanned.length} repositorios Git`);
-      setTimeout(() => setStatusMsg(''), 2500);
+      const cachedProjects = readJson<Project[]>(`${SCAN_CACHE_PREFIX}${pathStr}`);
+      if (cachedProjects?.length) {
+        setProjects(cachedProjects);
+        setLastDir(pathStr);
+      }
+      await refreshProjects(pathStr, false);
     } catch (err: any) {
       console.error(err);
       setStatusMsg(`Error: ${err}`);
-    } finally {
-      setIsLoading(false);
     }
   }
 
-  async function loadProject(project: Project) {
+  async function loadProject(
+    project: Project,
+    options: { preferCache?: boolean; backgroundRefresh?: boolean; forceRefresh?: boolean } = {},
+  ) {
     setSelectedProject(project);
-    setIsLoading(true);
+    localStorage.setItem(LAST_PROJECT_KEY, project.path);
+
+    const cached = !options.forceRefresh && options.preferCache !== false
+      ? getProjectCache(project.path)
+      : null;
+
+    if (cached) {
+      applyProjectData(project, cached);
+      if (autoHideProjects) {
+        setShowProjectsSidebar(false);
+      }
+      if (options.backgroundRefresh === false) {
+        return;
+      }
+    } else {
+      setIsLoading(true);
+    }
 
     try {
-      // Parallelize independent git queries for faster project load
-      const [brs, rms, chgs, tgs, sts, gitStatus] = await Promise.all([
-        invoke<GitBranchType[]>('get_branches', { repoPath: project.path }),
-        invoke<string[]>('get_remotes', { repoPath: project.path }),
-        invoke<FileChange[]>('get_file_changes', { repoPath: project.path }),
-        invoke<string[]>('get_tags', { repoPath: project.path }),
-        invoke<string[]>('get_stashes', { repoPath: project.path }),
-        invoke<GitStatus>('get_project_status', { repoPath: project.path }),
-      ]);
-
-      setBranches(brs);
-      setRemotes(rms);
-      setChanges(chgs);
-      setTags(tgs);
-      setStashes(sts);
-      setProjects((prev) => prev.map((item) => (
-        item.id === project.id ? { ...item, git_status: gitStatus } : item
-      )));
-      setSelectedProject((prev) => (
-        prev?.id === project.id ? { ...prev, git_status: gitStatus } : prev
-      ));
+      const data = await fetchProjectData(project);
 
       if (autoHideProjects) {
         setShowProjectsSidebar(false);
@@ -225,7 +346,7 @@ function App() {
 
       // Keep diff viewer open if the file is still there (update staged flag)
       if (selectedFileForDiff) {
-        const stillThere = chgs.find((c) => c.path === selectedFileForDiff.path);
+        const stillThere = data.changes.find((c) => c.path === selectedFileForDiff.path);
         if (stillThere) {
           const newSel = { path: stillThere.path, staged: stillThere.staged, status: stillThere.status };
           setSelectedFileForDiff(newSel);
@@ -244,7 +365,7 @@ function App() {
 
   async function refreshStatus() {
     if (!selectedProject) return;
-    await loadProject(selectedProject);
+    await loadProject(selectedProject, { forceRefresh: true, backgroundRefresh: false });
   }
 
   // Derived filtered projects

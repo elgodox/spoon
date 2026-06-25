@@ -2,7 +2,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use walkdir::WalkDir;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TechTag {
@@ -290,7 +302,7 @@ fn detect_tech_tags(path: &Path) -> Vec<TechTag> {
 
 fn get_git_status(repo: &Path) -> Result<GitStatus, String> {
     // Use git command for status (reliable, no extra build complexity)
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(repo)
         .args(["status", "--porcelain", "--branch"])
@@ -350,7 +362,7 @@ fn get_git_status(repo: &Path) -> Result<GitStatus, String> {
 
 #[tauri::command]
 pub fn get_branches(repo_path: String) -> Result<Vec<GitBranch>, String> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args(["branch", "-a", "--format=%(refname:short)|%(HEAD)"])
@@ -384,7 +396,7 @@ pub fn get_branches(repo_path: String) -> Result<Vec<GitBranch>, String> {
 
 #[tauri::command]
 pub fn get_remotes(repo_path: String) -> Result<Vec<String>, String> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args(["remote"])
@@ -414,7 +426,7 @@ pub fn run_git_command(repo_path: String, args: Vec<String>) -> Result<CommandRe
         return Err("Missing git arguments".into());
     }
 
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args(&args)
@@ -476,7 +488,7 @@ pub fn detect_cli_commands() -> Result<Vec<DetectedCli>, String> {
 #[tauri::command]
 pub fn get_commit_log(repo_path: String, limit: Option<usize>) -> Result<Vec<GitCommit>, String> {
     let lim = limit.unwrap_or(50);
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args([
@@ -537,7 +549,7 @@ pub fn get_commit_log(repo_path: String, limit: Option<usize>) -> Result<Vec<Git
 #[tauri::command]
 pub fn get_file_changes(repo_path: String) -> Result<Vec<FileChange>, String> {
     // Unstaged + staged
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args(["status", "--porcelain"])
@@ -582,7 +594,7 @@ pub fn stage_files(repo_path: String, files: Vec<String>) -> Result<(), String> 
     if files.is_empty() {
         return Ok(());
     }
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.arg("-C").arg(&repo_path).arg("add").arg("--").args(&files);
     let status = cmd.status().map_err(|e| e.to_string())?;
     if status.success() {
@@ -597,7 +609,7 @@ pub fn unstage_files(repo_path: String, files: Vec<String>) -> Result<(), String
     if files.is_empty() {
         return Ok(());
     }
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.arg("-C").arg(&repo_path).arg("reset").arg("--").args(&files);
     let status = cmd.status().map_err(|e| e.to_string())?;
     if status.success() {
@@ -620,7 +632,7 @@ pub fn commit_changes(repo_path: String, message: String, files: Option<Vec<Stri
         }
     }
 
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args(["commit", "-m", &message])
@@ -638,7 +650,7 @@ pub fn commit_changes(repo_path: String, message: String, files: Option<Vec<Stri
 
 #[tauri::command]
 pub fn checkout_branch(repo_path: String, branch: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args(["checkout", &branch])
@@ -654,7 +666,7 @@ pub fn checkout_branch(repo_path: String, branch: String) -> Result<(), String> 
 
 #[tauri::command]
 pub fn fetch(repo_path: String) -> Result<(), String> {
-    Command::new("git")
+    git_command()
         .arg("-C")
         .arg(&repo_path)
         .arg("fetch")
@@ -672,7 +684,7 @@ pub fn get_diff(repo_path: String, file_path: String, staged: bool) -> Result<St
     args.push("--");
     args.push(&file_path);
 
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args(&args)
@@ -684,7 +696,7 @@ pub fn get_diff(repo_path: String, file_path: String, staged: bool) -> Result<St
 
 #[tauri::command]
 pub fn get_tags(repo_path: String) -> Result<Vec<String>, String> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args(["tag", "--list", "--sort=-creatordate"])
@@ -706,7 +718,7 @@ pub fn get_tags(repo_path: String) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub fn get_stashes(repo_path: String) -> Result<Vec<String>, String> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args(["stash", "list", "--pretty=format:%gd %s"])
@@ -727,7 +739,7 @@ pub fn get_stashes(repo_path: String) -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub fn is_repo_safe(repo_path: String) -> Result<bool, String> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(&repo_path)
         .args(["rev-parse", "--show-toplevel"])
@@ -751,7 +763,7 @@ pub fn is_repo_safe(repo_path: String) -> Result<bool, String> {
 pub fn add_safe_directory(path: String) -> Result<(), String> {
     // Normalize to forward slashes for Git on Windows (required for safe.directory to work reliably)
     let normalized = path.replace('\\', "/");
-    let status = Command::new("git")
+    let status = git_command()
         .args(["config", "--global", "--add", "safe.directory", &normalized])
         .status()
         .map_err(|e| e.to_string())?;
@@ -765,7 +777,7 @@ pub fn add_safe_directory(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn delete_local_branch(repo_path: String, branch: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["branch", "-D", &branch])
         .status()
@@ -775,7 +787,7 @@ pub fn delete_local_branch(repo_path: String, branch: String) -> Result<(), Stri
 
 #[tauri::command]
 pub fn create_branch(repo_path: String, branch: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["branch", &branch])
         .status()
@@ -785,7 +797,7 @@ pub fn create_branch(repo_path: String, branch: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn add_remote(repo_path: String, name: String, url: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["remote", "add", &name, &url])
         .status()
@@ -795,7 +807,7 @@ pub fn add_remote(repo_path: String, name: String, url: String) -> Result<(), St
 
 #[tauri::command]
 pub fn set_remote_url(repo_path: String, name: String, url: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["remote", "set-url", &name, &url])
         .status()
@@ -805,7 +817,7 @@ pub fn set_remote_url(repo_path: String, name: String, url: String) -> Result<()
 
 #[tauri::command]
 pub fn get_remote_url(repo_path: String, name: String) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C").arg(&repo_path)
         .args(["remote", "get-url", &name])
         .output()
@@ -818,7 +830,7 @@ pub fn get_remote_url(repo_path: String, name: String) -> Result<String, String>
 
 #[tauri::command]
 pub fn create_tag(repo_path: String, tag: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["tag", &tag])
         .status()
@@ -828,7 +840,7 @@ pub fn create_tag(repo_path: String, tag: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn create_stash(repo_path: String, message: Option<String>) -> Result<(), String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = git_command();
     cmd.arg("-C").arg(&repo_path).arg("stash").arg("push").arg("-u");
     if let Some(msg) = message {
         if !msg.trim().is_empty() {
@@ -841,7 +853,7 @@ pub fn create_stash(repo_path: String, message: Option<String>) -> Result<(), St
 
 #[tauri::command]
 pub fn discard_file_changes(repo_path: String, file_path: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["restore", "--source=HEAD", "--staged", "--worktree", "--", &file_path])
         .status()
@@ -851,7 +863,7 @@ pub fn discard_file_changes(repo_path: String, file_path: String) -> Result<(), 
 
 #[tauri::command]
 pub fn delete_untracked_file(repo_path: String, file_path: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["clean", "-f", "--", &file_path])
         .status()
@@ -861,7 +873,7 @@ pub fn delete_untracked_file(repo_path: String, file_path: String) -> Result<(),
 
 #[tauri::command]
 pub fn stash_pop(repo_path: String, stash_ref: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["stash", "pop", &stash_ref])
         .status()
@@ -871,7 +883,7 @@ pub fn stash_pop(repo_path: String, stash_ref: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn stash_apply(repo_path: String, stash_ref: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["stash", "apply", &stash_ref])
         .status()
@@ -881,7 +893,7 @@ pub fn stash_apply(repo_path: String, stash_ref: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn stash_drop(repo_path: String, stash_ref: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["stash", "drop", &stash_ref])
         .status()
@@ -891,7 +903,7 @@ pub fn stash_drop(repo_path: String, stash_ref: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn delete_tag(repo_path: String, tag: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["tag", "-d", &tag])
         .status()
@@ -901,7 +913,7 @@ pub fn delete_tag(repo_path: String, tag: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn delete_remote(repo_path: String, remote: String) -> Result<(), String> {
-    let status = Command::new("git")
+    let status = git_command()
         .arg("-C").arg(&repo_path)
         .args(["remote", "remove", &remote])
         .status()

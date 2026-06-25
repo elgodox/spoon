@@ -9,6 +9,7 @@ import 'xterm/css/xterm.css';
 interface AITerminalProps {
   repoPath?: string | null;
   cliCommands?: DetectedCli[];
+  autoStart?: boolean;
 }
 
 const preferredCliOrder = [
@@ -23,7 +24,7 @@ const preferredCliOrder = [
   'node',
 ];
 
-export function AITerminal({ repoPath, cliCommands = [] }: AITerminalProps) {
+export function AITerminal({ repoPath, cliCommands = [], autoStart = false }: AITerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -48,7 +49,6 @@ export function AITerminal({ repoPath, cliCommands = [] }: AITerminalProps) {
 
     term.open(containerRef.current);
     fitAddon.fit();
-    term.focus();
 
     termRef.current = term;
     fitRef.current = fitAddon;
@@ -97,7 +97,7 @@ export function AITerminal({ repoPath, cliCommands = [] }: AITerminalProps) {
     };
   }, []);
 
-  const startShell = async () => {
+  const startShell = async (shouldFocus = false) => {
     if (!repoPath) {
       return;
     }
@@ -113,7 +113,9 @@ export function AITerminal({ repoPath, cliCommands = [] }: AITerminalProps) {
         // Force size sync + focus after the shell is alive (fixes input on many Windows setups)
         const { rows, cols } = termRef.current;
         invoke('resize_terminal', { rows, cols }).catch(() => {});
-        termRef.current.focus();
+        if (shouldFocus) {
+          termRef.current.focus();
+        }
       }
     } catch (e: any) {
       console.error(e);
@@ -125,14 +127,12 @@ export function AITerminal({ repoPath, cliCommands = [] }: AITerminalProps) {
 
   // Auto-start PowerShell when repo changes (and clear previous)
   useEffect(() => {
-    if (repoPath) {
-      // small delay to let UI settle and previous effect cleanup
-      const t = setTimeout(() => {
-        startShell();
-      }, 120);
-      return () => clearTimeout(t);
-    }
-  }, [repoPath]);
+    if (!autoStart || !repoPath) return;
+    const t = setTimeout(() => {
+      startShell();
+    }, 120);
+    return () => clearTimeout(t);
+  }, [autoStart, repoPath]);
 
   const injectAiPrompt = async () => {
     if (!repoPath) {
@@ -188,7 +188,7 @@ Start now.
     <div className="flex flex-col h-full border border-[#2a2a2f] rounded overflow-hidden bg-[#0a0a0b]">
       <div className="flex items-center gap-1.5 px-2 py-1.5 bg-[#1a1a1d] border-b border-[#2a2a2f] flex-shrink-0 overflow-x-auto">
         <button
-          onClick={startShell}
+          onClick={() => startShell(true)}
           className="text-[10px] px-2 py-0.5 bg-emerald-700 hover:bg-emerald-600 rounded font-medium whitespace-nowrap"
         >
           Shell
