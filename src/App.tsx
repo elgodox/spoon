@@ -148,6 +148,8 @@ function App() {
           }
         } catch (err) {
           console.error(err);
+          // Clear bad lastDir so it doesn't hang on every future startup
+          try { localStorage.removeItem('lastDir'); } catch {}
         } finally {
           setIsLoading(false);
           setStatusMsg('');
@@ -195,12 +197,15 @@ function App() {
     setIsLoading(true);
 
     try {
-      const brs = (await invoke('get_branches', { repoPath: project.path })) as GitBranchType[];
-      const rms = (await invoke('get_remotes', { repoPath: project.path })) as string[];
-      const chgs = (await invoke('get_file_changes', { repoPath: project.path })) as FileChange[];
-      const tgs = (await invoke('get_tags', { repoPath: project.path })) as string[];
-      const sts = (await invoke('get_stashes', { repoPath: project.path })) as string[];
-      const gitStatus = (await invoke('get_project_status', { repoPath: project.path })) as GitStatus;
+      // Parallelize independent git queries for faster project load
+      const [brs, rms, chgs, tgs, sts, gitStatus] = await Promise.all([
+        invoke<GitBranchType[]>('get_branches', { repoPath: project.path }),
+        invoke<string[]>('get_remotes', { repoPath: project.path }),
+        invoke<FileChange[]>('get_file_changes', { repoPath: project.path }),
+        invoke<string[]>('get_tags', { repoPath: project.path }),
+        invoke<string[]>('get_stashes', { repoPath: project.path }),
+        invoke<GitStatus>('get_project_status', { repoPath: project.path }),
+      ]);
 
       setBranches(brs);
       setRemotes(rms);
@@ -720,18 +725,40 @@ function App() {
           {!selectedProject ? (
             <div className="flex flex-col items-center justify-center h-full text-center px-8">
               <div className="text-7xl mb-6 opacity-80">🥄</div>
-              <h1 className="text-4xl font-semibold tracking-tighter mb-2">Bienvenido a Spoon</h1>
-              <p className="max-w-md text-zinc-400 mb-8">
-                Carga una carpeta con tus proyectos. Verás los archivos modificados, diffs, y una terminal PowerShell interactiva.
-                Inicia agentes de IA (Claude, Codex, Grok...) y usa el botón para inyectar prompts que analicen cambios, hagan commit en inglés y push.
-              </p>
-              <button
-                onClick={handleOpenDirectory}
-                className="flex items-center gap-3 px-8 py-3 bg-violet-600 hover:bg-violet-500 active:bg-violet-700 transition rounded-xl text-lg font-medium shadow-lg"
-              >
-                <FolderOpen /> Seleccionar carpeta de proyectos
-              </button>
-              <p className="text-[10px] text-zinc-500 mt-8">Soporta Windows, macOS y Linux • 100% local • Privado</p>
+              {isLoading ? (
+                <>
+                  <h1 className="text-3xl font-semibold tracking-tighter mb-3">Cargando tu último directorio...</h1>
+                  <p className="max-w-md text-zinc-400 mb-6">
+                    {statusMsg || 'Escaneando proyectos... Esto puede tardar un poco si la carpeta es grande o tiene muchos repos.'}
+                  </p>
+                  <div className="animate-pulse text-xs text-zinc-500 mb-6">Escaneo recursivo (profundidad máx. 5) + detección de tech + estado Git</div>
+                  <button
+                    onClick={() => {
+                      try { localStorage.removeItem('lastDir'); } catch {}
+                      handleOpenDirectory();
+                    }}
+                    className="flex items-center gap-3 px-8 py-3 bg-white/10 hover:bg-white/15 active:bg-white/20 transition rounded-xl text-base font-medium"
+                  >
+                    <FolderOpen /> Elegir otra carpeta
+                  </button>
+                  <p className="text-[10px] text-zinc-500 mt-8">Si se traba aquí, usa el botón de arriba para abrir manualmente.</p>
+                </>
+              ) : (
+                <>
+                  <h1 className="text-4xl font-semibold tracking-tighter mb-2">Bienvenido a Spoon</h1>
+                  <p className="max-w-md text-zinc-400 mb-8">
+                    Carga una carpeta con tus proyectos. Verás los archivos modificados, diffs, y una terminal PowerShell interactiva.
+                    Inicia agentes de IA (Claude, Codex, Grok...) y usa el botón para inyectar prompts que analicen cambios, hagan commit en inglés y push.
+                  </p>
+                  <button
+                    onClick={handleOpenDirectory}
+                    className="flex items-center gap-3 px-8 py-3 bg-violet-600 hover:bg-violet-500 active:bg-violet-700 transition rounded-xl text-lg font-medium shadow-lg"
+                  >
+                    <FolderOpen /> Seleccionar carpeta de proyectos
+                  </button>
+                  <p className="text-[10px] text-zinc-500 mt-8">Soporta Windows, macOS y Linux • 100% local • Privado</p>
+                </>
+              )}
             </div>
           ) : (
             <>

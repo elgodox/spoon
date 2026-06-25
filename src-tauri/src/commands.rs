@@ -81,25 +81,41 @@ pub fn scan_directory(root_path: String) -> Result<Vec<Project>, String> {
     let mut projects: Vec<Project> = Vec::new();
 
     // Walk max depth 5 levels to avoid huge scans (tunable)
+    // Use filter_entry to prune heavy directories early so we never descend into them.
     for entry in WalkDir::new(root)
         .max_depth(5)
+        .follow_links(false)
         .into_iter()
+        .filter_entry(|e| {
+            let s = e.path().to_string_lossy();
+            !s.contains("/node_modules/")
+                && !s.contains("\\node_modules\\")
+                && !s.contains("/.git/")
+                && !s.contains("\\.git\\")
+                && !s.contains("/target/")
+                && !s.contains("\\target\\")
+                && !s.contains("/dist/")
+                && !s.contains("\\dist\\")
+                && !s.contains("/.next/")
+                && !s.contains("\\.next\\")
+                && !s.contains("/.nuxt/")
+                && !s.contains("\\.nuxt\\")
+                && !s.contains("/build/")
+                && !s.contains("\\build\\")
+                && !s.contains("/out/")
+                && !s.contains("\\out\\")
+                && !s.contains("/venv/")
+                && !s.contains("\\venv\\")
+                && !s.contains("/.venv/")
+                && !s.contains("\\.venv\\")
+                && !s.contains("/__pycache__/")
+                && !s.contains("\\__pycache__\\")
+                && !s.contains("/.cargo/")
+                && !s.contains("\\.cargo\\")
+        })
         .filter_map(|e| e.ok())
     {
         let path = entry.path();
-
-        // Skip common heavy dirs
-        if path.to_string_lossy().contains("/node_modules/")
-            || path.to_string_lossy().contains("\\node_modules\\")
-            || path.to_string_lossy().contains("/.git/")
-            || path.to_string_lossy().contains("\\.git\\")
-            || path.to_string_lossy().contains("/target/")
-            || path.to_string_lossy().contains("\\target\\")
-            || path.to_string_lossy().contains("/dist/")
-            || path.to_string_lossy().contains("\\dist\\")
-        {
-            continue;
-        }
 
         if is_git_repo(path) {
             let tags = detect_tech_tags(path);
@@ -109,9 +125,8 @@ pub fn scan_directory(root_path: String) -> Result<Vec<Project>, String> {
                 .unwrap_or("unknown")
                 .to_string();
 
-            let git_status = get_git_status(path).ok();
-            let last_commit = get_last_commit_info(path).ok();
-
+            // Keep only fast FS + cheap unsafe check in discovery.
+            // git status / last commit are now loaded on-demand when a project is selected (in loadProject).
             let is_unsafe = !is_repo_safe(path.to_string_lossy().to_string()).unwrap_or(true);
 
             let project = Project {
@@ -120,9 +135,9 @@ pub fn scan_directory(root_path: String) -> Result<Vec<Project>, String> {
                 path: path.to_string_lossy().to_string(),
                 tags,
                 has_git: true,
-                git_status,
-                last_commit: last_commit.as_ref().map(|c| c.message.clone()),
-                last_commit_date: last_commit.as_ref().map(|c| c.date.clone()),
+                git_status: None,
+                last_commit: None,
+                last_commit_date: None,
                 is_unsafe,
             };
             projects.push(project);
@@ -331,36 +346,6 @@ fn get_git_status(repo: &Path) -> Result<GitStatus, String> {
         behind,
         changed_files,
     })
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct LastCommit {
-    pub message: String,
-    pub date: String,
-}
-
-fn get_last_commit_info(repo: &Path) -> Result<LastCommit, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["log", "-1", "--pretty=format:%s|%ci"])
-        .output()
-        .map_err(|e| e.to_string())?;
-
-    if !output.status.success() {
-        return Err("no commits".into());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let parts: Vec<&str> = stdout.trim().split('|').collect();
-    if parts.len() >= 2 {
-        Ok(LastCommit {
-            message: parts[0].to_string(),
-            date: parts[1].to_string(),
-        })
-    } else {
-        Err("parse error".into())
-    }
 }
 
 #[tauri::command]
