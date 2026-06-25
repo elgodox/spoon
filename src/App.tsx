@@ -722,7 +722,7 @@ function App() {
 
         {/* Main Content */}
         <div className="flex-1 h-full flex flex-col overflow-hidden">
-          {!selectedProject ? (
+          {projects.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center px-8">
               <div className="text-7xl mb-6 opacity-80">🥄</div>
               {isLoading ? (
@@ -762,37 +762,39 @@ function App() {
             </div>
           ) : (
             <>
-              {/* Project Header - minimal now, controls moved to top bar */}
-              <div className="border-b border-[#2a2a2f] px-4 py-2 bg-[#111113] flex-shrink-0">
-                <div className="flex items-center gap-4">
-                  <div>
-                  <span className="font-semibold text-lg">{selectedProject.name}</span>
-                  <span className="ml-3 text-xs text-zinc-500">{selectedProject.path}</span>
+              {/* Project Header - only when one is selected */}
+              {selectedProject && (
+                <div className="border-b border-[#2a2a2f] px-4 py-2 bg-[#111113] flex-shrink-0">
+                  <div className="flex items-center gap-4">
+                    <div>
+                    <span className="font-semibold text-lg">{selectedProject.name}</span>
+                    <span className="ml-3 text-xs text-zinc-500">{selectedProject.path}</span>
+                    </div>
+                    <div className="flex-1" />
+                    <div className="flex items-center gap-2 text-sm">
+                      {branches.find((b) => b.is_current) && (
+                        <div className="px-2.5 py-px rounded bg-emerald-900/60 text-emerald-400 flex items-center gap-1">
+                          <GitBranch size={14} /> {branches.find((b) => b.is_current)?.name}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex-1" />
-                  <div className="flex items-center gap-2 text-sm">
-                    {branches.find((b) => b.is_current) && (
-                      <div className="px-2.5 py-px rounded bg-emerald-900/60 text-emerald-400 flex items-center gap-1">
-                        <GitBranch size={14} /> {branches.find((b) => b.is_current)?.name}
-                      </div>
-                    )}
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <button onClick={gitFetchAll} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">fetch</button>
+                    <button onClick={gitPull} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">pull</button>
+                    <button onClick={gitPush} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">push</button>
+                    <button onClick={gitMerge} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">merge</button>
+                    <button onClick={gitRebase} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">rebase</button>
+                    <button onClick={gitCherryPick} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">pick</button>
+                    <button onClick={gitRevert} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">revert</button>
+                    <button onClick={gitReset} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">reset</button>
+                    <button onClick={gitClean} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">clean</button>
+                    <button onClick={gitWorktree} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">worktree</button>
+                    <button onClick={gitSubmodule} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">submodule</button>
+                    <button onClick={gitCustom} className="text-[10px] px-2 py-0.5 bg-violet-700/80 hover:bg-violet-700 rounded">git...</button>
                   </div>
                 </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  <button onClick={gitFetchAll} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">fetch</button>
-                  <button onClick={gitPull} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">pull</button>
-                  <button onClick={gitPush} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">push</button>
-                  <button onClick={gitMerge} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">merge</button>
-                  <button onClick={gitRebase} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">rebase</button>
-                  <button onClick={gitCherryPick} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">pick</button>
-                  <button onClick={gitRevert} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">revert</button>
-                  <button onClick={gitReset} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">reset</button>
-                  <button onClick={gitClean} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">clean</button>
-                  <button onClick={gitWorktree} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">worktree</button>
-                  <button onClick={gitSubmodule} className="text-[10px] px-2 py-0.5 bg-white/10 hover:bg-white/15 rounded">submodule</button>
-                  <button onClick={gitCustom} className="text-[10px] px-2 py-0.5 bg-violet-700/80 hover:bg-violet-700 rounded">git...</button>
-                </div>
-              </div>
+              )}
 
               {selectedProject?.is_unsafe && (
                 <div className="bg-red-900/30 border-b border-red-800 px-4 py-2 text-xs flex items-center justify-between text-red-300 flex-shrink-0">
@@ -803,6 +805,13 @@ function App() {
                   >
                     Add safe.directory exception
                   </button>
+                </div>
+              )}
+
+              {/* If no project selected yet but we have the list, show a hint in the main area */}
+              {!selectedProject && (
+                <div className="px-4 py-2 text-xs text-zinc-400 border-b border-[#2a2a2f] bg-[#111113] flex-shrink-0">
+                  Selecciona un proyecto de la lista de la izquierda para ver sus cambios, diffs y abrir la terminal PowerShell.
                 </div>
               )}
 
@@ -1063,15 +1072,17 @@ function App() {
                         previewKind={preview.kind}
                         previewUrl={preview.url}
                       />
-                    ) : (
+                    ) : selectedProject ? (
                       <div className="h-full flex items-center justify-center text-zinc-400 text-sm p-4 text-center">Click a file to view diff</div>
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-zinc-400 text-sm p-4 text-center">Selecciona un proyecto de la izquierda para ver la lista de archivos y diffs.</div>
                     )}
                   </div>
                   {renderResizeHandle('diff')}
                   <div
                     className="h-full min-w-[20rem] flex-1 border-l border-[#2a2a2f] bg-[#111113]"
                   >
-                    <AITerminal repoPath={selectedProject.path} cliCommands={cliCommands} />
+                    <AITerminal repoPath={selectedProject?.path} cliCommands={cliCommands} />
                   </div>
                 </div>
 
