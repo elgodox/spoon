@@ -1,0 +1,33 @@
+{
+  "name": "spoon",
+  "productName": "Spoon",
+  "version": "1.0.0",
+  "description": "A fast and friendly Git client for Windows, with AI commit messages.",
+  "main": "./out/main/index.js",
+  "author": "elgodox",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "postinstall": "node scripts/ensure-electron.cjs",
+    "dev": "node scripts/dev.cjs",
+    "start": "npm run build && electron .",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "pack": "npm run build && electron-builder --win nsis",
+    "dist": "npm run pack"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.3",
+    "electron": "^38.8.6",
+    "electron-builder": "^26.0.12",
+    "electron-vite": "^4.0.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.7"
+  }
+}

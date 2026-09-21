@@ -1,0 +1,36 @@
+appId: com.spoon.git
+productName: Spoon
+copyright: Copyright © 2026 Alan (elgodox)
+directories:
+  output: dist
+  buildResources: resources
+files:
+  - out/**/*
+win:
+  icon: resources/icon.ico
+  executableName: Spoon
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: Spoon-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Spoon
+  uninstallDisplayName: Spoon
+  runAfterFinish: true
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  installerHeaderIcon: resources/icon.ico
+  installerSidebar: resources/installerSidebar.bmp
+  installerHeader: resources/installerHeader.bmp
+extraResources:
+  - from: resources/icon.png
+    to: icon.png
+extraMetadata:
+  main: out/main/index.js
