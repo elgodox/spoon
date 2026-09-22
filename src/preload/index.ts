@@ -88,7 +88,9 @@ const api = {
       ipcRenderer.invoke('ai:generate', provider, diff, extra, model),
     analyze: (repo: string, provider: string, model?: string) =>
       ipcRenderer.invoke('ai:analyze', repo, provider, model),
-    models: (provider: string, force?: boolean) => ipcRenderer.invoke('ai:models', provider, force)
+    models: (provider: string, force?: boolean) => ipcRenderer.invoke('ai:models', provider, force),
+    addEndpoint: (endpoint: object, apiKey?: string) => ipcRenderer.invoke('ai:addEndpoint', endpoint, apiKey),
+    removeEndpoint: (id: string) => ipcRenderer.invoke('ai:removeEndpoint', id)
   },
   app: {
     settings: () => ipcRenderer.invoke('app:settings'),

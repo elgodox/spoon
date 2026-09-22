@@ -1,6 +1,6 @@
 export type ThemeMode = 'light' | 'dark' | 'system'
 
-export type AiProviderId = 'grok' | 'chatgpt' | 'claude'
+export type AiProviderId = string
 
 export interface AiModelChoice {
   id: string
@@ -195,13 +195,26 @@ export interface AiAccount {
   email?: string
 }
 
+export interface AiEndpointConfig {
+  id: string
+  label: string
+  baseUrl: string
+  defaultModel: string
+  consoleUrl?: string
+  extraHeaders?: Record<string, string>
+  needsKey: boolean
+  blurb?: string
+  accent?: string
+}
+
 export interface Settings {
   theme: ThemeMode
   gitPath?: string
   fetchIntervalMin: number
   autoFetch: boolean
   aiProvider: AiProviderId
-  aiModels: Record<AiProviderId, string>
+  aiModels: Record<string, string>
+  aiEndpoints: AiEndpointConfig[]
   aiCommitMode: AiCommitMode
   aiStageAll: boolean
   recentMessages: string[]

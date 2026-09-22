@@ -1,7 +1,8 @@
-import { AI_MODELS } from '../shared/models'
-import type { AiModelCatalog, AiModelChoice, AiProviderId } from '../shared/types'
+import { findAiSite, openAiUrl } from '../shared/ai-catalog'
+import { AI_MODELS, defaultModelFor } from '../shared/models'
+import type { AiEndpointConfig, AiModelCatalog, AiModelChoice, AiProviderId } from '../shared/types'
 import { resolveCreds } from './oauth'
-import type { StoredAiCreds } from './store'
+import { getSettings, type StoredAiCreds } from './store'
 
 const TTL_MS = 2 * 60 * 1000
 const cache = new Map<AiProviderId, { at: number; catalog: AiModelCatalog }>()
@@ -10,21 +11,56 @@ export async function listProviderModels(provider: AiProviderId, force = false):
   const hit = cache.get(provider)
   if (!force && hit && Date.now() - hit.at < TTL_MS) return hit.catalog
   try {
-    const creds = await resolveCreds(provider)
     const models =
-      provider === 'grok'
-        ? await grokModels(creds)
-        : provider === 'claude'
-          ? await claudeModels(creds)
-          : await openAiModels(creds)
-    const catalog = catalogOf(provider, models.length ? dedupe(models) : AI_MODELS[provider], models.length > 0)
+      provider === 'free'
+        ? await freeModels()
+        : provider === 'grok'
+          ? await grokModels(await resolveCreds(provider))
+          : provider === 'claude'
+            ? await claudeModels(await resolveCreds(provider))
+            : provider === 'chatgpt'
+              ? await openAiModels(await resolveCreds(provider))
+              : await compatModels(provider)
+    const catalog = catalogOf(
+      provider,
+      models.length ? dedupe(models) : fallbackModels(provider),
+      models.length > 0
+    )
     cache.set(provider, { at: Date.now(), catalog })
     return catalog
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (hit) return { ...hit.catalog, error: message }
-    return catalogOf(provider, AI_MODELS[provider], false, message)
+    return catalogOf(provider, fallbackModels(provider), false, message)
   }
+}
+
+function fallbackModels(provider: AiProviderId): AiModelChoice[] {
+  if (AI_MODELS[provider]?.length) return AI_MODELS[provider]
+  const id = defaultModelFor(provider, getSettings())
+  return id ? [{ id, label: id }] : []
+}
+
+function endpointFor(provider: AiProviderId): AiEndpointConfig | null {
+  return getSettings().aiEndpoints.find((item) => item.id === provider) ?? findAiSite(provider) ?? null
+}
+
+async function compatModels(provider: AiProviderId): Promise<AiModelChoice[]> {
+  const endpoint = endpointFor(provider)
+  if (!endpoint) throw new Error('Unknown AI provider.')
+  const creds = await resolveCreds(provider).catch(() => null)
+  const key = creds?.apiKey || creds?.accessToken
+  if (endpoint.needsKey && !key) throw new Error(`${endpoint.label} is not connected.`)
+  const headers: Record<string, string> = {
+    accept: 'application/json',
+    ...(endpoint.extraHeaders ?? {})
+  }
+  if (key) headers.Authorization = `Bearer ${key}`
+  const data = await getJson(openAiUrl(endpoint.baseUrl, 'models'), headers)
+  return readEntries(data)
+    .map((row) => row.id)
+    .sort((a, b) => a.localeCompare(b))
+    .map((id) => choice(id))
 }
 
 function catalogOf(
@@ -34,6 +70,35 @@ function catalogOf(
   error?: string
 ): AiModelCatalog {
   return { provider, models, live, error }
+}
+
+async function freeModels(): Promise<AiModelChoice[]> {
+  const res = await fetch('https://text.pollinations.ai/models', {
+    headers: { accept: 'application/json', Referer: 'https://pollinations.ai/' },
+    signal: AbortSignal.timeout(20_000)
+  })
+  const data = (await res.json().catch(() => [])) as unknown
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  const rows = Array.isArray(data) ? data : []
+  const models: AiModelChoice[] = []
+  const seen = new Set<string>()
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue
+    const item = row as { name?: unknown; description?: unknown; aliases?: unknown }
+    const id = typeof item.name === 'string' ? item.name : ''
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    const description = typeof item.description === 'string' ? item.description : ''
+    models.push(choice(id, description ? `${description}` : id))
+    if (Array.isArray(item.aliases)) {
+      for (const alias of item.aliases) {
+        if (typeof alias !== 'string' || !alias || seen.has(alias)) continue
+        seen.add(alias)
+        models.push(choice(alias, description ? `${description} (${alias})` : alias))
+      }
+    }
+  }
+  return models
 }
 
 async function grokModels(creds: StoredAiCreds): Promise<AiModelChoice[]> {

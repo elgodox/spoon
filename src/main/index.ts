@@ -10,7 +10,7 @@ import {
 } from 'electron'
 import { existsSync, mkdirSync, watch as fsWatch, writeFileSync, type FSWatcher } from 'node:fs'
 import { join } from 'node:path'
-import type { ActivityItem, AiProviderId, CommitOptions, FetchOptions, PullOptions, PushOptions, RebaseTodoItem, Settings } from '../shared/types'
+import type { ActivityItem, AiEndpointConfig, AiProviderId, CommitOptions, FetchOptions, PullOptions, PushOptions, RebaseTodoItem, Settings } from '../shared/types'
 import * as git from './git'
 import * as store from './store'
 import * as oauth from './oauth'
@@ -197,15 +197,27 @@ function buildMenu(): void {
     {
       label: 'File',
       submenu: [
-        { label: 'Repository Manager', accelerator: 'Ctrl+N', click: () => sendMenu('manager') },
+        { label: 'New Tab', accelerator: 'Ctrl+N', click: () => sendMenu('manager') },
         { type: 'separator' },
-        { label: 'Clone...', accelerator: 'Ctrl+Shift+N', click: () => sendMenu('clone') },
-        { label: 'Open...', accelerator: 'Ctrl+O', click: () => sendMenu('open') },
-        { label: 'Init New Repository...', click: () => sendMenu('init') },
+        { label: 'Clone Repository…', accelerator: 'Ctrl+Shift+N', click: () => sendMenu('clone') },
+        { label: 'Open Repository…', accelerator: 'Ctrl+O', click: () => sendMenu('open') },
+        { label: 'Create New Repository…', click: () => sendMenu('init') },
         { type: 'separator' },
-        { label: 'Preferences...', accelerator: 'Ctrl+,', click: () => sendMenu('settings') },
+        { label: 'Preferences…', accelerator: 'Ctrl+,', click: () => sendMenu('settings') },
         { type: 'separator' },
         { role: 'quit', label: 'Exit' }
+      ]
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
       ]
     },
     {
@@ -213,7 +225,7 @@ function buildMenu(): void {
       submenu: [
         { label: 'Quick Launch', accelerator: 'Ctrl+P', click: () => sendMenu('quick') },
         { label: 'Changes', accelerator: 'Ctrl+1', click: () => sendMenu('changes') },
-        { label: 'All Commits', accelerator: 'Ctrl+2', click: () => sendMenu('commits') },
+        { label: 'History', accelerator: 'Ctrl+2', click: () => sendMenu('commits') },
         { type: 'separator' },
         { label: 'Toggle Theme', click: () => sendMenu('theme') },
         { type: 'separator' },
@@ -234,12 +246,19 @@ function buildMenu(): void {
         { type: 'separator' },
         { label: 'Commit', accelerator: 'Ctrl+Enter', click: () => sendMenu('commit') },
         { label: 'Commit & Push', accelerator: 'Ctrl+Shift+Enter', click: () => sendMenu('commit-push') },
-        { label: 'AI Fill Message', accelerator: 'Ctrl+Alt+M', click: () => sendMenu('ai-fill') },
-        { label: 'AI Commit', accelerator: 'Ctrl+Alt+Enter', click: () => sendMenu('ai-commit') },
-        { label: 'AI Commit & Push', accelerator: 'Ctrl+Alt+Shift+Enter', click: () => sendMenu('ai-commit-push') },
-        { label: 'Analyze Changes', accelerator: 'Ctrl+Alt+A', click: () => sendMenu('analyze') },
         { type: 'separator' },
-        { label: 'New Branch...', accelerator: 'Ctrl+Shift+B', click: () => sendMenu('branch') },
+        {
+          label: 'AI',
+          submenu: [
+            { label: 'Write Message', accelerator: 'Ctrl+Alt+M', click: () => sendMenu('ai-fill') },
+            { label: 'Commit', accelerator: 'Ctrl+Alt+Enter', click: () => sendMenu('ai-commit') },
+            { label: 'Commit & Push', accelerator: 'Ctrl+Alt+Shift+Enter', click: () => sendMenu('ai-commit-push') },
+            { type: 'separator' },
+            { label: 'Analyze Changes', accelerator: 'Ctrl+Alt+A', click: () => sendMenu('analyze') }
+          ]
+        },
+        { type: 'separator' },
+        { label: 'New Branch…', accelerator: 'Ctrl+Shift+B', click: () => sendMenu('branch') },
         { label: 'Stash', click: () => sendMenu('stash') }
       ]
     },
@@ -251,11 +270,18 @@ function buildMenu(): void {
       label: 'Help',
       submenu: [
         {
-          label: 'Git Fork (inspiration)',
+          label: 'Spoon on GitHub',
           click: () => {
-            void shell.openExternal('https://git-fork.com/')
+            void shell.openExternal('https://github.com/elgodox/spoon')
           }
         },
+        {
+          label: 'Report an Issue',
+          click: () => {
+            void shell.openExternal('https://github.com/elgodox/spoon/issues')
+          }
+        },
+        { type: 'separator' },
         { label: 'About Spoon', click: () => sendMenu('about') }
       ]
     }
@@ -493,6 +519,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('ai:disconnect', (_e, provider: AiProviderId) => {
     oauth.disconnect(provider)
+    oauth.applyFreeFallback()
     return oauth.accounts()
   })
   ipcMain.handle('ai:console', (_e, provider: AiProviderId) => oauth.openProviderConsole(provider))
@@ -506,6 +533,8 @@ function registerIpc(): void {
     analyzeRepository(provider, repo, model)
   )
   ipcMain.handle('ai:models', (_e, provider: AiProviderId, force?: boolean) => listProviderModels(provider, !!force))
+  ipcMain.handle('ai:addEndpoint', (_e, endpoint: AiEndpointConfig, apiKey?: string) => oauth.addEndpoint(endpoint, apiKey))
+  ipcMain.handle('ai:removeEndpoint', (_e, id: string) => oauth.removeEndpoint(id))
 }
 
 async function snapshot(path: string) {
@@ -578,6 +607,7 @@ app.whenReady().then(async () => {
       }
     }
   }
+  oauth.applyFreeFallback()
   registerIpc()
   buildMenu()
   createWindow()

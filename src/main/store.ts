@@ -27,8 +27,9 @@ const defaults: Settings = {
   theme: 'system',
   fetchIntervalMin: 10,
   autoFetch: true,
-  aiProvider: 'grok',
+  aiProvider: 'free',
   aiModels: { ...DEFAULT_AI_MODELS },
+  aiEndpoints: [],
   aiCommitMode: 'fill',
   aiStageAll: true,
   recentMessages: [],
@@ -59,7 +60,8 @@ function load(): StoreFile {
       settings: {
         ...defaults,
         ...parsed.settings,
-        aiModels: { ...defaults.aiModels, ...(parsed.settings?.aiModels ?? {}) }
+        aiModels: { ...defaults.aiModels, ...(parsed.settings?.aiModels ?? {}) },
+        aiEndpoints: parsed.settings?.aiEndpoints ?? []
       },
       recent: parsed.recent ?? [],
       folders: parsed.folders ?? [],
@@ -159,7 +161,8 @@ export function clearCreds(provider: AiProviderId): void {
 }
 
 export function allCreds(): StoredAiCreds[] {
-  return (['grok', 'chatgpt', 'claude'] as AiProviderId[])
+  const data = load()
+  return Object.keys(data.creds)
     .map((p) => loadCreds(p))
     .filter((c): c is StoredAiCreds => !!c)
 }

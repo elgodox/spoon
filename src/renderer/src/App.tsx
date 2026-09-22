@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEven
 import type {
   ActivityItem,
   AiAccount,
+  AiEndpointConfig,
   AiModelCatalog,
   AiModelChoice,
   AiProviderId,
@@ -24,7 +25,9 @@ import type {
   TagInfo
 } from '../../shared/types'
 import { classifyMedia, formatBytes } from '../../shared/media'
-import { AI_MODELS, DEFAULT_AI_MODELS } from '../../shared/models'
+import { AI_SITE_CATALOG, customProviderId } from '../../shared/ai-catalog'
+import { ProviderIcon } from './ai-logos'
+import { AI_MODELS, BUILTIN_AI_IDS, DEFAULT_AI_MODELS, defaultModelFor, listedProviderIds, PAID_AI_PROVIDERS, providerLabel } from '../../shared/models'
 import {
   IcoAi,
   IcoBranch,
@@ -135,6 +138,7 @@ export function App() {
   settingsRef.current = settings
   const [sidebarW, setSidebarW] = useState(220)
   const [catalogs, setCatalogs] = useState<Record<AiProviderId, AiModelCatalog>>({
+    free: { provider: 'free', models: AI_MODELS.free, live: false },
     grok: { provider: 'grok', models: AI_MODELS.grok, live: false },
     chatgpt: { provider: 'chatgpt', models: AI_MODELS.chatgpt, live: false },
     claude: { provider: 'claude', models: AI_MODELS.claude, live: false }
@@ -158,22 +162,29 @@ export function App() {
   }, [])
 
   const refreshModels = useCallback(async (force = false) => {
-    const providers: AiProviderId[] = ['grok', 'chatgpt', 'claude']
+    const ids = listedProviderIds(settingsRef.current)
     const loaded = await Promise.all(
-      providers.map(async (provider) => {
+      ids.map(async (provider) => {
         try {
           return (await window.spoon.ai.models(provider, force)) as AiModelCatalog
         } catch (error) {
           return {
             provider,
-            models: AI_MODELS[provider],
+            models: AI_MODELS[provider] ?? [],
             live: false,
             error: error instanceof Error ? error.message : String(error)
           }
         }
       })
     )
-    setCatalogs({ grok: loaded[0], chatgpt: loaded[1], claude: loaded[2] })
+    const next: Record<string, AiModelCatalog> = {
+      free: { provider: 'free', models: AI_MODELS.free, live: false },
+      grok: { provider: 'grok', models: AI_MODELS.grok, live: false },
+      chatgpt: { provider: 'chatgpt', models: AI_MODELS.chatgpt, live: false },
+      claude: { provider: 'claude', models: AI_MODELS.claude, live: false }
+    }
+    for (const catalog of loaded) next[catalog.provider] = catalog
+    setCatalogs(next)
   }, [])
 
   const refreshSettings = useCallback(async () => {
@@ -741,8 +752,8 @@ function Workspace({
   const [splitRatio, setSplitRatio] = useState(settings?.changesSplit ?? 0.55)
   const [detailsH, setDetailsH] = useState(settings?.detailsHeight ?? 260)
   const [commitH, setCommitH] = useState(settings?.commitBoxHeight ?? 168)
-  const provider = (settings?.aiProvider || 'grok') as AiProviderId
-  const model = settings?.aiModels?.[provider] || DEFAULT_AI_MODELS[provider]
+  const provider = (settings?.aiProvider || 'free') as AiProviderId
+  const model = defaultModelFor(provider, settings)
   const modelChoices = modelOptions(catalogs[provider], model)
 
   const changesCount = snap.status.stagedCount + snap.status.unstagedCount
@@ -2152,7 +2163,7 @@ function DialogHost({
     return (
       <Modal title="Spoon" onClose={onClose}>
         <p>A fast and friendly Git client for Windows.</p>
-        <p>Commit messages can be written with Grok, ChatGPT, or Claude. AI commit stays local unless you push yourself.</p>
+        <p>Commit messages can be written with Free AI, Grok, ChatGPT, Claude, or any OpenAI-compatible API. AI commit stays local unless you push yourself.</p>
         <div className="dialog-foot">
           <button className="primary" onClick={onClose}>
             OK
@@ -2266,17 +2277,21 @@ function Modal({
   title,
   onClose,
   children,
-  wide
+  wide,
+  className
 }: {
   title: string
   onClose: () => void
   children: ReactNode
   wide?: boolean
+  className?: string
 }) {
   return (
     <div className="dialog-back" onMouseDown={onClose}>
-      <div className={`dialog ${wide ? 'wide' : ''}`} onMouseDown={(e) => e.stopPropagation()}>
-        <h2>{title}</h2>
+      <div className={`dialog ${wide ? 'wide' : ''} ${className ?? ''}`.trim()} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="dialog-head">
+          <h2>{title}</h2>
+        </div>
         <div className="dialog-body">{children}</div>
       </div>
     </div>
@@ -2642,139 +2657,370 @@ function SettingsDialog({
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
+  const [tab, setTab] = useState<'look' | 'ai'>('ai')
   const [key, setKey] = useState('')
-  const [provider, setProvider] = useState<AiProviderId>(settings?.aiProvider ?? 'grok')
+  const [provider, setProvider] = useState<AiProviderId>(settings?.aiProvider ?? 'free')
   const [acc, setAcc] = useState(accounts)
   const [local, setLocal] = useState<Record<string, { available: boolean; label?: string }>>({})
   const [device, setDevice] = useState<{ userCode: string; url: string } | null>(null)
+  const [adding, setAdding] = useState<string | null>(null)
+  const [addKey, setAddKey] = useState('')
+  const [addModel, setAddModel] = useState('')
+  const [customName, setCustomName] = useState('')
+  const [customUrl, setCustomUrl] = useState('')
+  const [customKey, setCustomKey] = useState('')
+  const [customModel, setCustomModel] = useState('')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const endpoints = settings?.aiEndpoints ?? []
+  const addedIds = new Set(endpoints.map((item) => item.id))
+
   useEffect(() => {
     void window.spoon.ai.local().then(setLocal)
   }, [])
+  useEffect(() => {
+    if (settings?.aiProvider) setProvider(settings.aiProvider)
+  }, [settings?.aiProvider])
+  useEffect(() => {
+    setAcc(accounts)
+  }, [accounts])
 
   async function refresh() {
     setAcc((await window.spoon.ai.accounts()) as AiAccount[])
     await onSaved()
   }
 
+  async function selectProvider(id: AiProviderId) {
+    setProvider(id)
+    await window.spoon.app.patchSettings({ aiProvider: id })
+    await onSaved()
+  }
+
+  async function addSite(site: AiEndpointConfig, apiKey?: string, model?: string) {
+    setBusyId(site.id)
+    try {
+      const endpoint: AiEndpointConfig = {
+        ...site,
+        defaultModel: model?.trim() || site.defaultModel
+      }
+      const result = (await window.spoon.ai.addEndpoint(endpoint, apiKey)) as { accounts: AiAccount[] }
+      setAcc(result.accounts)
+      setAdding(null)
+      setAddKey('')
+      setAddModel('')
+      setProvider(site.id)
+      await onSaved()
+    } catch (error) {
+      await window.spoon.app.error(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function addCustom() {
+    const label = customName.trim() || 'Custom API'
+    const baseUrl = customUrl.trim()
+    if (!/^https?:\/\//i.test(baseUrl)) {
+      await window.spoon.app.error('Base URL must start with http:// or https://')
+      return
+    }
+    const id = customProviderId(label, [...BUILTIN_AI_IDS, ...AI_SITE_CATALOG.map((s) => s.id), ...endpoints.map((e) => e.id)])
+    await addSite(
+      {
+        id,
+        label,
+        baseUrl,
+        defaultModel: customModel.trim() || 'gpt-4o-mini',
+        needsKey: Boolean(customKey.trim()),
+        blurb: 'Custom OpenAI-compatible endpoint',
+        accent: '#0b57d0'
+      },
+      customKey,
+      customModel
+    )
+    setCustomName('')
+    setCustomUrl('')
+    setCustomKey('')
+    setCustomModel('')
+  }
+
+  const yours = listedProviderIds(settings)
+  const catalogLeft = AI_SITE_CATALOG.filter((site) => !addedIds.has(site.id) && !BUILTIN_AI_IDS.includes(site.id))
+
   return (
-    <Modal title="Preferences" onClose={onClose}>
-      <h3>Appearance</h3>
-      <div className="row-btns">
-        {(['light', 'dark', 'system'] as const).map((t) => (
-          <button
-            key={t}
-            className="ghost"
-            onClick={async () => {
-              await window.spoon.app.patchSettings({ theme: t })
-              await onSaved()
-            }}
-          >
-            {t === 'system' ? 'Match Windows' : t === 'dark' ? 'Dark' : 'Light'}
-          </button>
-        ))}
+    <Modal title="Preferences" onClose={onClose} wide className="prefs">
+      <div className="prefs-tabs" role="tablist">
+        <button type="button" role="tab" className={tab === 'look' ? 'on' : ''} aria-selected={tab === 'look'} onClick={() => setTab('look')}>
+          Appearance
+        </button>
+        <button type="button" role="tab" className={tab === 'ai' ? 'on' : ''} aria-selected={tab === 'ai'} onClick={() => setTab('ai')}>
+          AI
+        </button>
       </div>
-      <label style={{ marginTop: 12 }}>Frosted glass</label>
-      <input
-        type="range"
-        min={0}
-        max={80}
-        value={settings?.glass ?? 40}
-        onChange={(e) => {
-          const glass = Number(e.target.value)
-          void window.spoon.app.patchSettings({ glass }).then(() => void onSaved())
-        }}
-      />
-      <p className="hint">
-        {settings?.glass ?? 40}% blur on the toolbar, tabs and branch sidebar. 0 is solid.
-      </p>
-      <h3 style={{ marginTop: 16 }}>AI commit messages</h3>
-      <p className="hint">
-        AI message only fills the box. AI commit creates the commit and does not push. Analyze splits the current changes into one local commit per implementation.
-      </p>
-      <label>Provider</label>
-      <select
-        value={provider}
-        onChange={async (e) => {
-          const p = e.target.value as AiProviderId
-          setProvider(p)
-          await window.spoon.app.patchSettings({ aiProvider: p })
-          await onSaved()
-        }}
-      >
-        <option value="grok">Grok</option>
-        <option value="chatgpt">ChatGPT</option>
-        <option value="claude">Claude</option>
-      </select>
-      <ModelField provider={provider} settings={settings} catalog={catalogs[provider]} onSaved={onSaved} />
-      {(['grok', 'chatgpt', 'claude'] as AiProviderId[]).map((p) => {
-        const a = acc.find((x) => x.provider === p)
-        return (
-          <div className="provider" key={p}>
-            <h3>
-              {p === 'grok' ? 'Grok' : p === 'chatgpt' ? 'ChatGPT' : 'Claude'}
-              {a?.connected ? <span className="pill-on">Connected {a.label ? `· ${a.label}` : ''}</span> : <span className="hint">Not connected</span>}
-            </h3>
-            <div className="row-btns">
-              {local[p]?.available && (
-                <button className="ghost" onClick={async () => { await window.spoon.ai.importLocal(p); await refresh() }}>
-                  Use local session{local[p].label ? ` (${local[p].label})` : ''}
-                </button>
-              )}
-              {p === 'grok' && (
-                <>
-                  <button
-                    className="ghost"
-                    onClick={async () => {
-                      try {
-                        await window.spoon.ai.grokPkce()
-                        await refresh()
-                      } catch {
-                        const flow = (await window.spoon.ai.grokDevice()) as { userCode: string; verificationUrl: string }
-                        setDevice({ userCode: flow.userCode, url: flow.verificationUrl })
-                        await window.spoon.ai.grokPoll(flow)
-                        setDevice(null)
-                        await refresh()
-                      }
-                    }}
-                  >
-                    Sign in with Grok
-                  </button>
-                </>
-              )}
-              <button className="ghost" onClick={() => void window.spoon.ai.openConsole(p)}>
-                Open console
-              </button>
-              {a?.connected && (
-                <button className="ghost" onClick={async () => { await window.spoon.ai.disconnect(p); await refresh() }}>
-                  Disconnect
-                </button>
-              )}
-            </div>
-            <label>API key</label>
-            <div className="row-btns">
-              <input type="password" value={provider === p ? key : ''} onChange={(e) => { setProvider(p); setKey(e.target.value) }} placeholder="Paste key" />
+
+      {tab === 'look' && (
+        <section className="prefs-pane">
+          <h3>Theme</h3>
+          <div className="seg">
+            {(['light', 'dark', 'system'] as const).map((t) => (
               <button
-                className="ghost"
+                key={t}
+                className={settings?.theme === t ? 'on' : ''}
                 onClick={async () => {
-                  await window.spoon.ai.saveApiKey(p, key)
-                  setKey('')
-                  await refresh()
+                  await window.spoon.app.patchSettings({ theme: t })
+                  await onSaved()
                 }}
               >
-                Save key
+                {t === 'system' ? 'Match Windows' : t === 'dark' ? 'Dark' : 'Light'}
               </button>
-            </div>
+            ))}
           </div>
-        )
-      })}
-      {device && (
-        <p>
-          Enter code <b>{device.userCode}</b> at {device.url}
-        </p>
+          <label>Frosted glass</label>
+          <input
+            type="range"
+            min={0}
+            max={80}
+            value={settings?.glass ?? 40}
+            onChange={(e) => {
+              const glass = Number(e.target.value)
+              void window.spoon.app.patchSettings({ glass }).then(() => void onSaved())
+            }}
+          />
+          <p className="hint">{settings?.glass ?? 40}% blur on the toolbar, tabs and branch sidebar. 0 is solid.</p>
+        </section>
       )}
+
+      {tab === 'ai' && (
+        <section className="prefs-pane">
+          <p className="hint">
+            AI message fills the box. AI commit stays local. Analyze splits the worktree into one local commit per implementation.
+          </p>
+
+          <div className="ai-active">
+            <div className="ai-active-top">
+              <span className="ai-mark">
+                <ProviderIcon id={provider} label={providerLabel(provider, endpoints)} />
+              </span>
+              <div>
+                <strong>{providerLabel(provider, endpoints)}</strong>
+                <p className="hint">Active provider</p>
+              </div>
+            </div>
+            <ModelField provider={provider} settings={settings} catalog={catalogs[provider]} onSaved={onSaved} />
+          </div>
+
+          <h3>Your providers</h3>
+          <div className="ai-grid">
+            {yours.map((p) => {
+              const a = acc.find((x) => x.provider === p)
+              const endpoint = endpoints.find((item) => item.id === p)
+              const connected = p === 'free' || !!a?.connected
+              const selected = provider === p
+              return (
+                <div key={p} className={`ai-card ${selected ? 'on' : ''}`}>
+                  <button type="button" className="ai-card-hit" onClick={() => void selectProvider(p)}>
+                    <span className="ai-mark">
+                      <ProviderIcon id={p} label={providerLabel(p, endpoints)} />
+                    </span>
+                    <span className="ai-card-copy">
+                      <b>{providerLabel(p, endpoints)}</b>
+                      <span className={connected ? 'pill-on' : 'hint'}>
+                        {p === 'free' ? 'Ready · no account' : connected ? `Connected${a?.label ? ` · ${a.label}` : ''}` : 'Not connected'}
+                      </span>
+                    </span>
+                  </button>
+                  {selected && p !== 'free' && (
+                    <div className="ai-card-body">
+                      {BUILTIN_AI_IDS.includes(p) && (
+                        <div className="row-btns">
+                          {local[p]?.available && (
+                            <div className="ai-local">
+                              <button
+                                className="ghost"
+                                title={local[p].label ? `Use local session (${local[p].label})` : 'Use local session'}
+                                onClick={async () => { await window.spoon.ai.importLocal(p); await refresh() }}
+                              >
+                                Use local session
+                              </button>
+                              {local[p].label && (
+                                <span className="hint ai-mail" title={local[p].label}>
+                                  {local[p].label}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {p === 'grok' && (
+                            <button
+                              className="ghost"
+                              onClick={async () => {
+                                try {
+                                  await window.spoon.ai.grokPkce()
+                                  await refresh()
+                                } catch {
+                                  const flow = (await window.spoon.ai.grokDevice()) as { userCode: string; verificationUrl: string }
+                                  setDevice({ userCode: flow.userCode, url: flow.verificationUrl })
+                                  await window.spoon.ai.grokPoll(flow)
+                                  setDevice(null)
+                                  await refresh()
+                                }
+                              }}
+                            >
+                              Sign in with Grok
+                            </button>
+                          )}
+                          <button className="ghost" onClick={() => void window.spoon.ai.openConsole(p)}>
+                            Get key
+                          </button>
+                          {a?.connected && (
+                            <button className="ghost" onClick={async () => { await window.spoon.ai.disconnect(p); await refresh() }}>
+                              Disconnect
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      {PAID_AI_PROVIDERS.includes(p) && (
+                        <div className="row-btns">
+                          <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste API key" />
+                          <button
+                            className="ghost"
+                            onClick={async () => {
+                              await window.spoon.ai.saveApiKey(p, key)
+                              setKey('')
+                              await refresh()
+                            }}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      )}
+                      {endpoint && (
+                        <>
+                          {endpoint.needsKey && (
+                            <div className="row-btns">
+                              <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste API key" />
+                              <button
+                                className="ghost"
+                                onClick={async () => {
+                                  await window.spoon.ai.saveApiKey(p, key)
+                                  setKey('')
+                                  await refresh()
+                                }}
+                              >
+                                Save
+                              </button>
+                            </div>
+                          )}
+                          <div className="row-btns">
+                            {endpoint.consoleUrl && (
+                              <button className="ghost" onClick={() => void window.spoon.ai.openConsole(p)}>
+                                Get key
+                              </button>
+                            )}
+                            <button
+                              className="ghost"
+                              onClick={async () => {
+                                await window.spoon.ai.removeEndpoint(p)
+                                await refresh()
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          <h3>Add a site</h3>
+          <p className="hint">OpenRouter, Groq, Gemini, Ollama, and other OpenAI-compatible APIs. Pick a card, paste a key if it needs one.</p>
+          <div className="ai-grid">
+            {catalogLeft.map((site) => (
+              <div key={site.id} className={`ai-card ${adding === site.id ? 'on' : ''}`}>
+                <button
+                  type="button"
+                  className="ai-card-hit"
+                  onClick={() => {
+                    if (!site.needsKey) {
+                      void addSite(site)
+                      return
+                    }
+                    setAdding(adding === site.id ? null : site.id)
+                    setAddKey('')
+                    setAddModel(site.defaultModel)
+                  }}
+                >
+                  <span className="ai-mark">
+                    <ProviderIcon id={site.id} label={site.label} />
+                  </span>
+                  <span className="ai-card-copy">
+                    <b>{site.label}</b>
+                    <span className="hint">{site.blurb}</span>
+                  </span>
+                </button>
+                {adding === site.id && site.needsKey && (
+                  <div className="ai-card-body">
+                    <label>API key</label>
+                    <input type="password" value={addKey} onChange={(e) => setAddKey(e.target.value)} placeholder="Paste key" />
+                    <label>Model</label>
+                    <input value={addModel} spellCheck={false} onChange={(e) => setAddModel(e.target.value)} placeholder={site.defaultModel} />
+                    <div className="row-btns">
+                      <button className="ghost" onClick={() => void window.spoon.ai.openConsole(site.id)}>
+                        Get key
+                      </button>
+                      <button
+                        className="primary"
+                        disabled={busyId === site.id || !addKey.trim()}
+                        onClick={() => void addSite(site, addKey, addModel)}
+                      >
+                        {busyId === site.id ? 'Adding…' : 'Add'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <h3>Custom endpoint</h3>
+          <p className="hint">Any OpenAI-compatible base URL — LiteLLM, vLLM, a proxy, or a provider that is not listed above.</p>
+          <div className="custom-grid">
+            <label>
+              Name
+              <input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="OpenRouter work" />
+            </label>
+            <label>
+              Base URL
+              <input value={customUrl} spellCheck={false} onChange={(e) => setCustomUrl(e.target.value)} placeholder="https://openrouter.ai/api/v1" />
+            </label>
+            <label>
+              API key
+              <input type="password" value={customKey} onChange={(e) => setCustomKey(e.target.value)} placeholder="Optional for local servers" />
+            </label>
+            <label>
+              Model
+              <input value={customModel} spellCheck={false} onChange={(e) => setCustomModel(e.target.value)} placeholder="gpt-4o-mini" />
+            </label>
+          </div>
+          <div className="row-btns" style={{ marginTop: 10 }}>
+            <button className="primary" disabled={!customUrl.trim() || !!busyId} onClick={() => void addCustom()}>
+              Add custom API
+            </button>
+          </div>
+
+          {device && (
+            <p className="hint">
+              Enter code <b>{device.userCode}</b> at {device.url}
+            </p>
+          )}
+        </section>
+      )}
+
       <div className="dialog-foot">
         <button className="primary" onClick={onClose}>
-          Close
+          Done
         </button>
       </div>
     </Modal>
@@ -2789,10 +3035,10 @@ function ModelField({
 }: {
   provider: AiProviderId
   settings: Settings | null
-  catalog: AiModelCatalog
+  catalog?: AiModelCatalog
   onSaved: () => Promise<void>
 }) {
-  const saved = settings?.aiModels?.[provider] || DEFAULT_AI_MODELS[provider]
+  const saved = defaultModelFor(provider, settings)
   const choices = modelOptions(catalog, saved)
   const [custom, setCustom] = useState(saved)
   useEffect(() => {
@@ -2808,6 +3054,7 @@ function ModelField({
     await onSaved()
   }
 
+  const name = providerLabel(provider, settings?.aiEndpoints)
   return (
     <>
       <label>Model</label>
@@ -2829,11 +3076,15 @@ function ModelField({
         }}
       />
       <p className="hint">
-        {catalog.live
-          ? `${catalog.models.length} models from your ${provider === 'chatgpt' ? 'ChatGPT' : provider === 'grok' ? 'Grok' : 'Claude'} account. The list refreshes on its own.`
-          : catalog.error
-            ? catalog.error
-            : 'Connect this provider to load every model it offers.'}
+        {provider === 'free'
+          ? catalog?.live
+            ? `${catalog.models.length} free models. No account required.`
+            : catalog?.error || 'Free models — no account required.'
+          : catalog?.live
+            ? `${catalog.models.length} models from ${name}. The list refreshes on its own.`
+            : catalog?.error
+              ? catalog.error
+              : 'Connect this provider to load every model it offers.'}
       </p>
     </>
   )

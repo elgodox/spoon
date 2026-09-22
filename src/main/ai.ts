@@ -1,8 +1,9 @@
-import type { AiProviderId, ChangeAnalysis } from '../shared/types'
+import { findAiSite, openAiUrl } from '../shared/ai-catalog'
+import type { AiEndpointConfig, AiProviderId, ChangeAnalysis } from '../shared/types'
 import { fallbackAnalysis, parseAnalysis } from './analysis'
 import { changeBrief } from './git'
-import { resolveCreds, providerLabel } from './oauth'
-import type { StoredAiCreds } from './store'
+import { providerLabel, resolveCreds } from './oauth'
+import { getSettings, type StoredAiCreds } from './store'
 
 const SYSTEM = `You write Git commit messages for a desktop Git client.
 Rules:
@@ -59,6 +60,20 @@ export async function analyzeRepository(provider: AiProviderId, cwd: string, mod
   }
 }
 
+function endpointFor(provider: AiProviderId): AiEndpointConfig | null {
+  if (provider === 'chatgpt') {
+    return {
+      id: 'chatgpt',
+      label: 'ChatGPT',
+      baseUrl: 'https://api.openai.com/v1',
+      defaultModel: 'gpt-4o',
+      needsKey: true,
+      consoleUrl: 'https://platform.openai.com/api-keys'
+    }
+  }
+  return getSettings().aiEndpoints.find((item) => item.id === provider) ?? findAiSite(provider) ?? null
+}
+
 async function complete(
   provider: AiProviderId,
   user: string,
@@ -66,10 +81,129 @@ async function complete(
   maxTokens?: number,
   model?: string
 ): Promise<string> {
-  const creds = await resolveCreds(provider)
-  if (provider === 'grok') return grokComplete(creds, user, system, maxTokens, model)
-  if (provider === 'claude') return claudeComplete(creds, user, system, maxTokens ?? 400, model)
-  return chatgptComplete(creds, user, system, maxTokens, model)
+  if (provider === 'free') return freeComplete(user, system, maxTokens, model)
+  try {
+    const creds = await resolveCreds(provider)
+    if (provider === 'grok') return grokComplete(creds, user, system, maxTokens, model)
+    if (provider === 'claude') return claudeComplete(creds, user, system, maxTokens ?? 400, model)
+    if (provider === 'chatgpt') return chatgptComplete(creds, user, system, maxTokens, model)
+    const endpoint = endpointFor(provider)
+    if (endpoint) return compatComplete(creds, endpoint, user, system, maxTokens, model)
+    return chatgptComplete(creds, user, system, maxTokens, model)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    if (/not connected|Connect /i.test(reason)) return freeComplete(user, system, maxTokens, model)
+    throw error
+  }
+}
+
+async function compatComplete(
+  creds: StoredAiCreds,
+  endpoint: AiEndpointConfig,
+  user: string,
+  system: string,
+  maxTokens?: number,
+  model = endpoint.defaultModel
+): Promise<string> {
+  const key = creds.apiKey || creds.accessToken
+  if (endpoint.needsKey && !key) throw new Error(`${endpoint.label} is not connected.`)
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    ...(endpoint.extraHeaders ?? {})
+  }
+  if (key) headers.Authorization = `Bearer ${key}`
+  const res = await fetch(openAiUrl(endpoint.baseUrl, 'chat/completions'), {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: model || endpoint.defaultModel,
+      temperature: 0.2,
+      ...(maxTokens ? { max_tokens: maxTokens } : {}),
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: user }
+      ]
+    }),
+    signal: AbortSignal.timeout(45_000)
+  })
+  const data = (await res.json().catch(() => ({}))) as {
+    error?: { message?: string } | string
+    choices?: { message?: { content?: string } }[]
+  }
+  if (!res.ok) {
+    const err = data.error
+    const message = typeof err === 'string' ? err : err?.message || `${res.status} ${res.statusText}`
+    throw new Error(message)
+  }
+  const text = data.choices?.[0]?.message?.content?.trim()
+  if (text) return cleanMessage(text)
+  throw new Error(`${endpoint.label} returned an empty response.`)
+}
+
+async function freeComplete(
+  user: string,
+  system = SYSTEM,
+  maxTokens?: number,
+  model = 'openai'
+): Promise<string> {
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: user }
+  ]
+  const body = {
+    model: model || 'openai',
+    temperature: 0.2,
+    ...(maxTokens ? { max_tokens: maxTokens } : {}),
+    messages
+  }
+  const attempts: { url: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [
+    {
+      url: 'https://text.pollinations.ai/openai',
+      headers: { Referer: 'https://pollinations.ai/' },
+      body
+    },
+    {
+      url: 'https://gen.pollinations.ai/v1/chat/completions',
+      headers: { Referer: 'https://pollinations.ai/' },
+      body
+    },
+    {
+      url: 'https://api.llm7.io/v1/chat/completions',
+      headers: { Authorization: 'Bearer unused' },
+      body: { ...body, model: 'default' }
+    }
+  ]
+  const errors: string[] = []
+  for (const attempt of attempts) {
+    try {
+      const res = await fetch(attempt.url, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...attempt.headers
+        },
+        body: JSON.stringify(attempt.body),
+        signal: AbortSignal.timeout(45_000)
+      })
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: { message?: string } | string
+        choices?: { message?: { content?: string } }[]
+      }
+      if (!res.ok) {
+        const err = data.error
+        errors.push(typeof err === 'string' ? err : err?.message || `${res.status} ${res.statusText}`)
+        continue
+      }
+      const text = data.choices?.[0]?.message?.content?.trim()
+      if (text) return cleanMessage(text)
+      errors.push('Empty Free AI response')
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error))
+    }
+  }
+  throw new Error(errors[0] ? `Free AI could not generate a commit message. ${errors[0]}` : 'Free AI could not generate a commit message.')
 }
 
 async function grokComplete(

@@ -1,6 +1,15 @@
-import type { AiProviderId } from './types'
+import { AI_SITE_CATALOG, findAiSite } from './ai-catalog'
+import type { AiEndpointConfig, AiProviderId, Settings } from './types'
 
-export const AI_MODELS: Record<AiProviderId, { id: string; label: string }[]> = {
+export const BUILTIN_AI_IDS: AiProviderId[] = ['free', 'grok', 'chatgpt', 'claude']
+export const AI_PROVIDER_IDS = BUILTIN_AI_IDS
+export const PAID_AI_PROVIDERS: AiProviderId[] = ['grok', 'chatgpt', 'claude']
+
+export const AI_MODELS: Record<string, { id: string; label: string }[]> = {
+  free: [
+    { id: 'openai', label: 'Free (GPT-OSS 20B)' },
+    { id: 'openai-fast', label: 'Free fast' }
+  ],
   grok: [
     { id: 'grok-4.7', label: 'Grok 4.7' },
     { id: 'grok-4.6', label: 'Grok 4.6' },
@@ -22,8 +31,34 @@ export const AI_MODELS: Record<AiProviderId, { id: string; label: string }[]> = 
   ]
 }
 
-export const DEFAULT_AI_MODELS: Record<AiProviderId, string> = {
+export const DEFAULT_AI_MODELS: Record<string, string> = {
+  free: 'openai',
   grok: 'grok-4.7',
   chatgpt: 'gpt-4o',
   claude: 'claude-sonnet-4-5'
+}
+
+export function listedProviderIds(settings?: Settings | null): AiProviderId[] {
+  const extra = settings?.aiEndpoints?.map((item) => item.id) ?? []
+  return [...BUILTIN_AI_IDS, ...extra.filter((id) => !BUILTIN_AI_IDS.includes(id))]
+}
+
+export function defaultModelFor(id: AiProviderId, settings?: Settings | null): string {
+  const saved = settings?.aiModels?.[id]
+  if (saved) return saved
+  if (DEFAULT_AI_MODELS[id]) return DEFAULT_AI_MODELS[id]
+  const endpoint = settings?.aiEndpoints?.find((item) => item.id === id) ?? findAiSite(id)
+  return endpoint?.defaultModel || 'gpt-4o-mini'
+}
+
+export function providerLabel(id: AiProviderId, endpoints: AiEndpointConfig[] = []): string {
+  if (id === 'free') return 'Free AI'
+  if (id === 'grok') return 'Grok'
+  if (id === 'claude') return 'Claude'
+  if (id === 'chatgpt') return 'ChatGPT'
+  const site = findAiSite(id) ?? AI_SITE_CATALOG.find((item) => item.id === id)
+  if (site) return site.label
+  const custom = endpoints.find((item) => item.id === id)
+  if (custom) return custom.label
+  return id
 }
