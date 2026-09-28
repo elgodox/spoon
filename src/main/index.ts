@@ -11,7 +11,7 @@ import {
 import { spawn, execFile } from 'node:child_process'
 import { existsSync, mkdirSync, watch as fsWatch, writeFileSync, type FSWatcher } from 'node:fs'
 import { release } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type {
   ActivityItem,
   AiEndpointConfig,
@@ -507,21 +507,34 @@ function registerIpc(): void {
     git.scanRepos(roots, (info) => send('scan:progress', info))
   )
   ipcMain.handle('app:pickRepo', async () => {
-    const r = await dialog.showOpenDialog(mainWindow!, { properties: ['openDirectory'] })
+    const r = await dialog.showOpenDialog(mainWindow!, {
+      title: 'Choose a Git repository or a folder of repositories',
+      properties: ['openDirectory']
+    })
     if (r.canceled) return null
     const path = r.filePaths[0]
-    if (!(await git.isRepo(path))) {
+    if (await git.isRepo(path)) {
+      const root = await git.repoRoot(path)
+      store.touchRepo(root, await git.repoName(root))
+      watchRepo(root)
+      return { repos: [root] }
+    }
+    const found = await git.scanRepos([path], (info) => send('scan:progress', info))
+    if (!found.length) {
       await dialog.showMessageBox(mainWindow!, {
         type: 'warning',
-        message: 'That folder is not a Git repository.',
-        detail: 'Use Clone or Create new, or pick a folder that contains a .git directory.'
+        message: 'No Git repositories in that folder.',
+        detail: 'Pick a repository, or a parent folder that contains repositories inside it.'
       })
       return null
     }
-    const root = await git.repoRoot(path)
-    store.touchRepo(root, await git.repoName(root))
-    watchRepo(root)
-    return root
+    store.addRepos(found)
+    const settings = store.getSettings()
+    const watched = settings.watchedRoots ?? []
+    if (!watched.some((root) => root.toLowerCase() === resolve(path).toLowerCase())) {
+      store.patchSettings({ watchedRoots: [...watched, resolve(path)] })
+    }
+    return { repos: found.map((repo) => repo.path) }
   })
   ipcMain.handle('app:confirm', async (_e, message: string, detail?: string) => {
     const r = await dialog.showMessageBox(mainWindow!, {

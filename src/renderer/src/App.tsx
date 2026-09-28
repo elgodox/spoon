@@ -376,8 +376,13 @@ export function App() {
 
   async function openExisting() {
     try {
-      const p = await window.spoon.app.pickRepo()
-      if (p) await loadRepo(p)
+      const picked = (await window.spoon.app.pickRepo()) as { repos?: string[] } | string | null
+      if (!picked) return
+      const repos = typeof picked === 'string' ? [picked] : (picked.repos ?? [])
+      if (!repos.length) return
+      await refreshSettings()
+      if (repos.length === 1) await loadRepo(repos[0])
+      else goHome()
     } catch (e) {
       await window.spoon.app.error(e instanceof Error ? e.message : String(e))
     }

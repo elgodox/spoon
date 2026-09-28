@@ -464,13 +464,13 @@ export function RepoHome({
               <IconAct label="Clone" hint="Clone from a Git URL" onClick={onClone}>
                 <IcoClone />
               </IconAct>
-              <IconAct label="Add" hint="Add an existing Git folder" onClick={onAdd}>
+              <IconAct label="Add" hint="Add a Git folder, or find every repo inside it" onClick={onAdd}>
                 <IcoAddRepo />
               </IconAct>
               <IconAct label="New" hint="Create a new repository" onClick={onInit}>
                 <IcoCreate />
               </IconAct>
-              <IconAct label="Scan" hint="Find Git repos in folders" onClick={() => void scanFolders()}>
+              <IconAct label="Scan" hint="Find every Git repo inside the folders you pick" onClick={() => void scanFolders()}>
                 <IcoScan />
               </IconAct>
               <IconAct

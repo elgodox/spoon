@@ -184,6 +184,15 @@ export async function scanRepos(
     onProgress?.({ found: found.length, looking })
   }
 
+  function addFound(dir: string): void {
+    const full = resolve(dir)
+    const key = full.toLowerCase()
+    if (seen.has(key)) return
+    seen.add(key)
+    found.push({ path: full, name: basename(full) })
+    onProgress?.({ found: found.length, looking: full })
+  }
+
   async function walk(dir: string, depth: number): Promise<void> {
     if (depth > 8) return
     progress(dir)
@@ -195,12 +204,7 @@ export async function scanRepos(
     }
     if (entries.some((entry) => entry.name === '.git')) {
       // Checking the folder name is enough; resolving the real root costs a git spawn per repo.
-      const key = resolve(dir).toLowerCase()
-      if (!seen.has(key)) {
-        seen.add(key)
-        found.push({ path: resolve(dir), name: basename(dir) })
-        onProgress?.({ found: found.length, looking: dir })
-      }
+      addFound(dir)
       return
     }
     await Promise.all(
@@ -216,7 +220,19 @@ export async function scanRepos(
     )
   }
 
-  await Promise.all(roots.filter((root) => root && existsSync(root)).map((root) => walk(resolve(root), 0)))
+  await Promise.all(
+    roots.filter((root) => root && existsSync(root)).map(async (root) => {
+      const resolved = resolve(root)
+      if (await isRepo(resolved)) {
+        const top = await repoRoot(resolved)
+        if (top.toLowerCase() === resolved.toLowerCase()) {
+          addFound(top)
+          return
+        }
+      }
+      return walk(resolved, 0)
+    })
+  )
   found.sort((a, b) => a.name.localeCompare(b.name))
   return found
 }
