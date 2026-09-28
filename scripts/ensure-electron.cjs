@@ -1,4 +1,4 @@
-const { existsSync, mkdirSync, writeFileSync } = require('node:fs')
+const { existsSync, rmSync, writeFileSync } = require('node:fs')
 const { join } = require('node:path')
 const { execSync } = require('node:child_process')
 const os = require('node:os')
@@ -31,16 +31,19 @@ function extractCachedZip() {
     return false
   }
   zips.sort()
-  const zip = zips[zips.length - 1]
+  const version = require(join(electronDir, 'package.json')).version
+  const zip = zips.find((z) => z.includes(`electron-v${version}-`)) || zips[zips.length - 1]
   if (!zip) return false
-  mkdirSync(distDir, { recursive: true })
+  // A half-extracted dist (only "locales" + "version") makes install.js think Electron is present.
+  rmSync(distDir, { recursive: true, force: true })
+  // Windows PowerShell 5.1 has no overwrite overload, so extract into a clean folder.
   const powershell = `
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::ExtractToDirectory('${zip.replace(/'/g, "''")}', '${distDir.replace(/'/g, "''")}', $true)
+    [System.IO.Compression.ZipFile]::ExtractToDirectory('${zip.replace(/'/g, "''")}', '${distDir.replace(/'/g, "''")}')
   `
   execSync(`powershell -NoProfile -Command "${powershell.replace(/"/g, '\\"')}"`, { stdio: 'inherit' })
   writeFileSync(pathTxt, 'electron.exe')
-  writeFileSync(join(distDir, 'version'), require(join(electronDir, 'package.json')).version)
+  writeFileSync(join(distDir, 'version'), version)
   return existsSync(exe)
 }
 
@@ -55,7 +58,7 @@ function install() {
 function ensure() {
   if (ok()) return true
   if (!existsSync(join(electronDir, 'package.json'))) {
-    console.error('Electron is not installed. Run npm install inside D:\\GitHub\\spoon')
+    console.error(`Electron is not installed. Run npm install inside ${root}`)
     return false
   }
   console.log('Electron binary missing — repairing…')

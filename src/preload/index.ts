@@ -74,6 +74,14 @@ const api = {
     lfs: (path: string) => ipcRenderer.invoke('git:lfs', path),
     worktrees: (path: string) => ipcRenderer.invoke('git:worktrees', path)
   },
+  repo: {
+    overview: (paths: string[]) => ipcRenderer.invoke('repo:overview', paths),
+    health: (path: string, deep?: boolean) => ipcRenderer.invoke('repo:health', path, deep),
+    fix: (path: string, fix: string, input?: { name?: string; email?: string }) =>
+      ipcRenderer.invoke('repo:fix', path, fix, input),
+    bulk: (action: string, paths: string[]) => ipcRenderer.invoke('repo:bulk', action, paths),
+    rescan: () => ipcRenderer.invoke('repo:rescan')
+  },
   ai: {
     accounts: () => ipcRenderer.invoke('ai:accounts'),
     local: () => ipcRenderer.invoke('ai:local'),
@@ -109,6 +117,12 @@ const api = {
     confirm: (message: string, detail?: string) => ipcRenderer.invoke('app:confirm', message, detail),
     error: (message: string) => ipcRenderer.invoke('app:error', message),
     popup: (items: object[]) => ipcRenderer.invoke('app:popup', items),
+    chrome: () => ipcRenderer.invoke('app:chrome'),
+    version: () => ipcRenderer.invoke('app:version'),
+    openIn: (path: string, target: 'editor' | 'terminal' | 'explorer') => ipcRenderer.invoke('app:openIn', path, target),
+    update: () => ipcRenderer.invoke('app:update'),
+    checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
+    installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
     on: (channel: string, fn: (...args: unknown[]) => void) => {
       const listener = (_e: unknown, ...args: unknown[]) => fn(...args)
       ipcRenderer.on(channel, listener)

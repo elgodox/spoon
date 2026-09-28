@@ -6,9 +6,21 @@ directories:
   buildResources: resources
 files:
   - out/**/*
+asar: true
+compression: maximum
+electronLanguages:
+  - en-US
+  - es
+removePackageScripts: true
+publish:
+  provider: github
+  owner: elgodox
+  repo: spoon
+  releaseType: release
 win:
   icon: resources/icon.ico
   executableName: Spoon
+  requestedExecutionLevel: asInvoker
   target:
     - target: nsis
       arch:
@@ -24,6 +36,9 @@ nsis:
   shortcutName: Spoon
   uninstallDisplayName: Spoon
   runAfterFinish: true
+  packElevateHelper: false
+  differentialPackage: false
+  deleteAppDataOnUninstall: false
   installerIcon: resources/icon.ico
   uninstallerIcon: resources/icon.ico
   installerHeaderIcon: resources/icon.ico

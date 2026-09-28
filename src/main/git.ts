@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
@@ -22,6 +22,10 @@ import type {
   PushOptions,
   RefLabel,
   RemoteInfo,
+  RepoFixId,
+  RepoHealth,
+  RepoIssue,
+  RepoOverview,
   RepoStatus,
   StashInfo,
   StatusEntry,
@@ -165,45 +169,66 @@ export async function scanRepos(
 ): Promise<{ path: string; name: string }[]> {
   const found: { path: string; name: string }[] = []
   const seen = new Set<string>()
+  const readLimit = limiter(24)
+  let lastProgress = 0
+
+  const progress = (looking: string) => {
+    const now = Date.now()
+    if (now - lastProgress < 80) return
+    lastProgress = now
+    onProgress?.({ found: found.length, looking })
+  }
 
   async function walk(dir: string, depth: number): Promise<void> {
     if (depth > 8) return
-    onProgress?.({ found: found.length, looking: dir })
+    progress(dir)
     let entries
     try {
-      entries = await readdir(dir, { withFileTypes: true })
+      entries = await readLimit(() => readdir(dir, { withFileTypes: true }))
     } catch {
       return
     }
     if (entries.some((entry) => entry.name === '.git')) {
-      if (await isRepo(dir)) {
-        try {
-          const root = await repoRoot(dir)
-          const key = root.toLowerCase()
-          if (!seen.has(key)) {
-            seen.add(key)
-            found.push({ path: root, name: await repoName(root) })
-            onProgress?.({ found: found.length, looking: root })
-          }
-        } catch {
-          /* ignore unreadable git dirs */
-        }
-        return
+      // Checking the folder name is enough; resolving the real root costs a git spawn per repo.
+      const key = resolve(dir).toLowerCase()
+      if (!seen.has(key)) {
+        seen.add(key)
+        found.push({ path: resolve(dir), name: basename(dir) })
+        onProgress?.({ found: found.length, looking: dir })
       }
+      return
     }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.isSymbolicLink()) continue
-      if (entry.name.startsWith('.')) continue
-      if (SCAN_SKIP.has(entry.name.toLowerCase())) continue
-      await walk(join(dir, entry.name), depth + 1)
-    }
+    await Promise.all(
+      entries
+        .filter(
+          (entry) =>
+            entry.isDirectory() &&
+            !entry.isSymbolicLink() &&
+            !entry.name.startsWith('.') &&
+            !SCAN_SKIP.has(entry.name.toLowerCase())
+        )
+        .map((entry) => walk(join(dir, entry.name), depth + 1))
+    )
   }
 
-  for (const root of roots) {
-    if (!root || !existsSync(root)) continue
-    await walk(resolve(root), 0)
-  }
+  await Promise.all(roots.filter((root) => root && existsSync(root)).map((root) => walk(resolve(root), 0)))
+  found.sort((a, b) => a.name.localeCompare(b.name))
   return found
+}
+
+export function limiter(max: number) {
+  let active = 0
+  const queue: (() => void)[] = []
+  return async function run<T>(fn: () => Promise<T>): Promise<T> {
+    if (active >= max) await new Promise<void>((r) => queue.push(r))
+    active++
+    try {
+      return await fn()
+    } finally {
+      active--
+      queue.shift()?.()
+    }
+  }
 }
 
 export async function isRepo(path: string): Promise<boolean> {
@@ -272,15 +297,36 @@ function guessCloneName(url: string): string {
   return part
 }
 
+const gitDirs = new Map<string, string>()
+
+export async function gitDirOf(cwd: string): Promise<string> {
+  const cached = gitDirs.get(cwd)
+  if (cached) return cached
+  const r = await git(cwd, ['rev-parse', '--absolute-git-dir'], { allowFail: true })
+  const dir = r.code === 0 && r.stdout.trim() ? resolve(r.stdout.trim()) : join(cwd, '.git')
+  gitDirs.set(cwd, dir)
+  return dir
+}
+
+function operationIn(gitDir: string): RepoOverview['operation'] {
+  if (existsSync(join(gitDir, 'rebase-merge')) || existsSync(join(gitDir, 'rebase-apply'))) return 'rebase'
+  if (existsSync(join(gitDir, 'MERGE_HEAD'))) return 'merge'
+  if (existsSync(join(gitDir, 'CHERRY_PICK_HEAD'))) return 'cherry-pick'
+  if (existsSync(join(gitDir, 'REVERT_HEAD'))) return 'revert'
+  if (existsSync(join(gitDir, 'BISECT_LOG'))) return 'bisect'
+  return undefined
+}
+
 export async function getStatus(cwd: string): Promise<RepoStatus> {
-  const [porcelain, inMerge, inRebase, inCherry, inRevert, inBisect] = await Promise.all([
+  const [porcelain, gitDir] = await Promise.all([
     git(cwd, ['status', '--porcelain=v2', '-b', '--untracked-files=normal', '--ignore-submodules=untracked']),
-    exists(join(cwd, '.git', 'MERGE_HEAD')),
-    exists(join(cwd, '.git', 'rebase-merge')) || exists(join(cwd, '.git', 'rebase-apply')),
-    exists(join(cwd, '.git', 'CHERRY_PICK_HEAD')),
-    exists(join(cwd, '.git', 'REVERT_HEAD')),
-    exists(join(cwd, '.git', 'BISECT_LOG'))
+    gitDirOf(cwd)
   ])
+  const inMerge = existsSync(join(gitDir, 'MERGE_HEAD'))
+  const inRebase = existsSync(join(gitDir, 'rebase-merge')) || existsSync(join(gitDir, 'rebase-apply'))
+  const inCherry = existsSync(join(gitDir, 'CHERRY_PICK_HEAD'))
+  const inRevert = existsSync(join(gitDir, 'REVERT_HEAD'))
+  const inBisect = existsSync(join(gitDir, 'BISECT_LOG'))
 
   let branch = 'HEAD'
   let detached = false
@@ -404,10 +450,6 @@ function parseUnmerged(line: string): StatusEntry {
 
 function isImage(path: string): boolean {
   return IMAGE_EXT.has(extname(path).toLowerCase())
-}
-
-async function exists(p: string): Promise<boolean> {
-  return existsSync(p)
 }
 
 export async function getCommits(cwd: string, max = 400, extraArgs: string[] = []): Promise<CommitInfo[]> {
@@ -1142,6 +1184,359 @@ export async function worktrees(cwd: string): Promise<{ path: string; branch: st
     if (line.startsWith('branch ')) out.push({ path, branch: line.slice(7).replace('refs/heads/', '') })
   }
   return out
+}
+
+function firstLine(text: string): string {
+  return (
+    text
+      .split('\n')
+      .map((l) => l.replace(/^(fatal|error|warning):\s*/i, '').trim())
+      .find(Boolean) ?? ''
+  )
+}
+
+const isDubious = (stderr: string) => /dubious ownership/i.test(stderr)
+
+export async function overview(path: string): Promise<RepoOverview> {
+  const base: RepoOverview = {
+    path,
+    name: basename(path),
+    exists: existsSync(path),
+    unsafe: false,
+    branch: '',
+    detached: false,
+    ahead: 0,
+    behind: 0,
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    conflicts: 0,
+    checkedAt: Date.now()
+  }
+  if (!base.exists) return { ...base, error: 'Folder not found' }
+  const st = await git(path, ['status', '--porcelain=v2', '-b', '--untracked-files=normal', '--ignore-submodules=untracked'], {
+    allowFail: true
+  })
+  if (st.code !== 0) {
+    const unsafe = isDubious(st.stderr)
+    return { ...base, unsafe, error: unsafe ? 'Git blocks this folder (dubious ownership)' : firstLine(st.stderr) || 'Not a Git repository' }
+  }
+  const out = { ...base }
+  for (const line of st.stdout.split('\n')) {
+    if (line.startsWith('# branch.head ')) {
+      const name = line.slice(14).trim()
+      out.detached = name === '(detached)'
+      out.branch = out.detached ? 'HEAD' : name
+    } else if (line.startsWith('# branch.upstream ')) out.upstream = line.slice(18).trim()
+    else if (line.startsWith('# branch.ab ')) {
+      const m = line.match(/\+(\d+) -(\d+)/)
+      if (m) {
+        out.ahead = Number(m[1])
+        out.behind = Number(m[2])
+      }
+    } else if (line.startsWith('1 ') || line.startsWith('2 ')) {
+      if (line[2] !== '.') out.staged++
+      if (line[3] !== '.') out.unstaged++
+    } else if (line.startsWith('u ')) out.conflicts++
+    else if (line.startsWith('? ')) out.untracked++
+  }
+  const [log, urls, gitDir] = await Promise.all([
+    git(path, ['log', '-1', '--format=%s%x1f%an%x1f%at'], { allowFail: true }),
+    git(path, ['config', '--get-regexp', '^remote\\..*\\.url$'], { allowFail: true }),
+    gitDirOf(path)
+  ])
+  if (log.code === 0 && log.stdout.trim()) {
+    const [subject, author, at] = log.stdout.trim().split('\x1f')
+    out.lastCommit = { subject, author, date: Number(at) * 1000 }
+  }
+  const remotes = urls.stdout
+    .split('\n')
+    .map((l) => l.match(/^remote\.(.+)\.url\s+(.+)$/))
+    .filter((m): m is RegExpMatchArray => !!m)
+  out.remoteUrl = (remotes.find((m) => m[1] === 'origin') ?? remotes[0])?.[2]?.trim()
+  out.operation = operationIn(gitDir)
+  return out
+}
+
+async function defaultBranch(path: string): Promise<string | undefined> {
+  const head = await git(path, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { allowFail: true })
+  if (head.code === 0 && head.stdout.trim()) return head.stdout.trim().replace(/^origin\//, '')
+  for (const name of ['main', 'master', 'develop']) {
+    const r = await git(path, ['show-ref', '--verify', '--quiet', `refs/heads/${name}`], { allowFail: true })
+    if (r.code === 0) return name
+  }
+  return undefined
+}
+
+async function goneBranches(path: string): Promise<string[]> {
+  const r = await git(path, ['for-each-ref', '--format=%(refname:short)%09%(upstream:track)%09%(HEAD)', 'refs/heads'], {
+    allowFail: true
+  })
+  return r.stdout
+    .split('\n')
+    .map((l) => l.split('\t'))
+    .filter(([name, track, head]) => name && track === '[gone]' && head !== '*')
+    .map(([name]) => name)
+}
+
+function preferredRemote(remotes: RemoteInfo[]): string | undefined {
+  return (remotes.find((r) => r.name === 'origin') ?? remotes[0])?.name
+}
+
+export async function health(path: string, deep = false): Promise<RepoHealth> {
+  const issues: RepoIssue[] = []
+  const done = () => ({ path, issues, checkedAt: Date.now() })
+  if (!existsSync(path)) {
+    issues.push({
+      id: 'missing',
+      severity: 'error',
+      title: 'Folder not found',
+      detail: 'This repository was moved or deleted. Remove it from the list, or scan its new location.',
+      fix: { id: 'remove-missing', label: 'Remove from list' }
+    })
+    return done()
+  }
+  const probe = await git(path, ['rev-parse', '--is-inside-work-tree'], { allowFail: true })
+  if (probe.code !== 0) {
+    if (isDubious(probe.stderr)) {
+      issues.push({
+        id: 'unsafe',
+        severity: 'error',
+        title: 'Git does not trust this folder',
+        detail: 'The folder belongs to another Windows user, so Git refuses to run here ("dubious ownership").',
+        fix: { id: 'safe-directory', label: 'Trust this folder' }
+      })
+    } else {
+      issues.push({
+        id: 'not-repo',
+        severity: 'error',
+        title: 'Not a Git repository anymore',
+        detail: firstLine(probe.stderr) || 'The .git folder is missing or unreadable.',
+        fix: { id: 'remove-missing', label: 'Remove from list' }
+      })
+    }
+    return done()
+  }
+
+  const gitDir = await gitDirOf(path)
+  const lock = join(gitDir, 'index.lock')
+  if (existsSync(lock)) {
+    const ageMin = Math.max(1, Math.round((Date.now() - statSync(lock).mtimeMs) / 60_000))
+    issues.push({
+      id: 'lock',
+      severity: 'error',
+      title: 'Stale lock file',
+      detail: `Git left index.lock behind ${ageMin} min ago, usually after a crash. Every command fails until it is removed.`,
+      fix: { id: 'remove-lock', label: 'Delete index.lock' }
+    })
+  }
+
+  const [status, remotes, ident, subs, gone, objects] = await Promise.all([
+    getStatus(path),
+    getRemotes(path),
+    identity(path),
+    getSubmodules(path),
+    goneBranches(path),
+    git(path, ['count-objects', '-v'], { allowFail: true })
+  ])
+
+  const op = operationIn(gitDir)
+  if (op && op !== 'bisect') {
+    issues.push({
+      id: 'operation',
+      severity: 'warn',
+      title: `${op[0].toUpperCase()}${op.slice(1)} in progress`,
+      detail: status.conflicted.length
+        ? `${status.conflicted.length} file(s) still have conflicts. Resolve them in Changes, or abort to go back to where you were.`
+        : 'Continue it from Changes, or abort to go back to where you were.',
+      fix: { id: 'abort-operation', label: `Abort ${op}`, destructive: true }
+    })
+  }
+
+  if (status.detached) {
+    const def = await defaultBranch(path)
+    issues.push({
+      id: 'detached',
+      severity: 'warn',
+      title: 'Detached HEAD',
+      detail: 'You are not on a branch. New commits here are easy to lose.',
+      fix: def ? { id: 'checkout-default', label: `Checkout ${def}` } : undefined
+    })
+  }
+
+  const remote = preferredRemote(remotes)
+  if (!remote) {
+    issues.push({
+      id: 'no-remote',
+      severity: 'info',
+      title: 'No remote',
+      detail: 'This repository only exists on this machine. Add a remote to back it up.'
+    })
+  } else if (!status.detached && !status.upstream) {
+    const exists = await git(path, ['show-ref', '--verify', '--quiet', `refs/remotes/${remote}/${status.branch}`], {
+      allowFail: true
+    })
+    issues.push(
+      exists.code === 0
+        ? {
+            id: 'no-upstream',
+            severity: 'warn',
+            title: 'Branch is not tracking its remote',
+            detail: `${remote}/${status.branch} exists, but ${status.branch} is not linked to it. Pull and push will not know where to go.`,
+            fix: { id: 'track-upstream', label: `Track ${remote}/${status.branch}` }
+          }
+        : {
+            id: 'unpublished',
+            severity: 'info',
+            title: 'Branch not published',
+            detail: `${status.branch} only exists locally.`,
+            fix: { id: 'publish-branch', label: `Publish to ${remote}` }
+          }
+    )
+  }
+
+  const dirty = status.stagedCount + status.unstagedCount
+  if (status.behind && status.ahead) {
+    issues.push({
+      id: 'diverged',
+      severity: 'warn',
+      title: 'Branch has diverged',
+      detail: `${status.ahead} local and ${status.behind} remote commit(s) differ. Pull with merge or rebase to reconcile.`
+    })
+  } else if (status.behind && !dirty && !op) {
+    issues.push({
+      id: 'behind',
+      severity: 'info',
+      title: `${status.behind} commit(s) behind`,
+      detail: `${status.upstream} has new commits and your working tree is clean.`,
+      fix: { id: 'pull-ff', label: 'Fast-forward' }
+    })
+  }
+
+  if (gone.length) {
+    issues.push({
+      id: 'gone',
+      severity: 'info',
+      title: `${gone.length} branch(es) deleted on the remote`,
+      detail: `${gone.slice(0, 6).join(', ')}${gone.length > 6 ? '…' : ''} track remote branches that no longer exist.`,
+      fix: { id: 'delete-gone-branches', label: 'Delete local copies', destructive: true }
+    })
+  }
+
+  if (!ident.name || !ident.email) {
+    issues.push({
+      id: 'identity',
+      severity: 'warn',
+      title: 'Commit identity missing',
+      detail: 'user.name or user.email is not set, so commits will fail or use a placeholder.',
+      fix: { id: 'set-identity', label: 'Set name and email' }
+    })
+  }
+
+  const uninit = subs.filter((s) => s.status === 'uninitialized')
+  if (uninit.length) {
+    issues.push({
+      id: 'submodules',
+      severity: 'warn',
+      title: `${uninit.length} submodule(s) not initialized`,
+      detail: `${uninit.map((s) => s.path).slice(0, 4).join(', ')} are empty folders until they are checked out.`,
+      fix: { id: 'submodules', label: 'Initialize submodules' }
+    })
+  }
+
+  const count = Number(objects.stdout.match(/^count: (\d+)/m)?.[1] ?? 0)
+  const garbage = Number(objects.stdout.match(/^size-garbage: (\d+)/m)?.[1] ?? 0)
+  if (count > 6000 || garbage > 0) {
+    issues.push({
+      id: 'gc',
+      severity: 'info',
+      title: 'Repository can be compacted',
+      detail: `${count.toLocaleString()} loose objects${garbage ? ' and leftover garbage' : ''}. Packing them makes Git faster.`,
+      fix: { id: 'gc', label: 'Compact (git gc)' }
+    })
+  }
+
+  if (deep) {
+    const fsck = await git(path, ['fsck', '--no-dangling', '--connectivity-only', '--no-progress'], { allowFail: true })
+    if (fsck.code !== 0) {
+      issues.push({
+        id: 'fsck',
+        severity: 'error',
+        title: 'Repository data is damaged',
+        detail: `${firstLine(fsck.stderr || fsck.stdout)}. Fetch from the remote may restore missing objects; otherwise re-clone.`,
+        fix: remote ? { id: 'prune', label: 'Fetch and prune' } : undefined
+      })
+    }
+  }
+
+  const order = { error: 0, warn: 1, info: 2 }
+  issues.sort((a, b) => order[a.severity] - order[b.severity])
+  return done()
+}
+
+export async function applyFix(path: string, fix: RepoFixId, input?: { name?: string; email?: string }): Promise<string> {
+  const remotes = () => getRemotes(path).then(preferredRemote)
+  switch (fix) {
+    case 'safe-directory': {
+      const r = await runGitRaw(undefined, ['config', '--global', '--add', 'safe.directory', path.replace(/\\/g, '/')])
+      if (r.code !== 0) throw new Error(firstLine(r.stderr) || 'Could not update safe.directory')
+      return 'Folder trusted'
+    }
+    case 'remove-lock': {
+      const lock = join(await gitDirOf(path), 'index.lock')
+      if (existsSync(lock)) unlinkSync(lock)
+      return 'Lock removed'
+    }
+    case 'abort-operation': {
+      const op = operationIn(await gitDirOf(path))
+      if (!op || op === 'bisect') return 'Nothing to abort'
+      await git(path, [op, '--abort'])
+      return `${op} aborted`
+    }
+    case 'publish-branch': {
+      const remote = await remotes()
+      if (!remote) throw new Error('No remote to publish to')
+      await git(path, ['push', '-u', remote, 'HEAD'])
+      return `Published to ${remote}`
+    }
+    case 'track-upstream': {
+      const remote = await remotes()
+      const branch = (await git(path, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim()
+      await git(path, ['branch', `--set-upstream-to=${remote}/${branch}`])
+      return `Tracking ${remote}/${branch}`
+    }
+    case 'pull-ff':
+      await git(path, ['pull', '--ff-only'])
+      return 'Up to date'
+    case 'prune':
+      await git(path, ['fetch', '--all', '--prune'])
+      return 'Fetched and pruned'
+    case 'gc':
+      await git(path, ['gc', '--prune=now', '--quiet'])
+      return 'Repository compacted'
+    case 'submodules':
+      await submoduleUpdate(path)
+      return 'Submodules initialized'
+    case 'delete-gone-branches': {
+      const gone = await goneBranches(path)
+      for (const name of gone) await git(path, ['branch', '-D', name])
+      return `Deleted ${gone.length} branch(es)`
+    }
+    case 'checkout-default': {
+      const def = await defaultBranch(path)
+      if (!def) throw new Error('No default branch found')
+      await git(path, ['checkout', def])
+      return `On ${def}`
+    }
+    case 'set-identity': {
+      if (!input?.name?.trim() || !input?.email?.trim()) throw new Error('Name and email are required')
+      await runGitRaw(undefined, ['config', '--global', 'user.name', input.name.trim()])
+      await runGitRaw(undefined, ['config', '--global', 'user.email', input.email.trim()])
+      return 'Identity saved'
+    }
+    case 'remove-missing':
+      return 'Removed'
+  }
 }
 
 

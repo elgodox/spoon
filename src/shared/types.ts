@@ -207,11 +207,21 @@ export interface AiEndpointConfig {
   accent?: string
 }
 
+export type WindowMaterial = 'mica' | 'acrylic' | 'none'
+export type RepoSort = 'name' | 'opened' | 'changes' | 'behind' | 'ahead' | 'status'
+
 export interface Settings {
   theme: ThemeMode
   gitPath?: string
   fetchIntervalMin: number
   autoFetch: boolean
+  autoFetchAll: boolean
+  autoUpdate: boolean
+  material: WindowMaterial
+  watchedRoots: string[]
+  pinned: string[]
+  onboarded: boolean
+  editor: 'code' | 'cursor' | 'explorer'
   aiProvider: AiProviderId
   aiModels: Record<string, string>
   aiEndpoints: AiEndpointConfig[]
@@ -229,6 +239,8 @@ export interface Settings {
   diffMode: 'unified' | 'split'
   showAvatars: boolean
   glass: number
+  windowBounds?: { x: number; y: number; width: number; height: number }
+  repoSort: RepoSort
 }
 
 export interface RebaseTodoItem {
@@ -307,6 +319,74 @@ export interface PlannedCommit {
 export interface ChangeAnalysis {
   summary: string
   commits: PlannedCommit[]
+}
+
+export interface RepoOverview {
+  path: string
+  name: string
+  exists: boolean
+  unsafe: boolean
+  branch: string
+  detached: boolean
+  upstream?: string
+  ahead: number
+  behind: number
+  staged: number
+  unstaged: number
+  untracked: number
+  conflicts: number
+  operation?: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect'
+  remoteUrl?: string
+  lastCommit?: { subject: string; author: string; date: number }
+  error?: string
+  checkedAt: number
+}
+
+export type RepoFixId =
+  | 'safe-directory'
+  | 'remove-lock'
+  | 'abort-operation'
+  | 'publish-branch'
+  | 'track-upstream'
+  | 'pull-ff'
+  | 'prune'
+  | 'gc'
+  | 'submodules'
+  | 'delete-gone-branches'
+  | 'checkout-default'
+  | 'set-identity'
+  | 'remove-missing'
+
+export interface RepoIssue {
+  id: string
+  severity: 'error' | 'warn' | 'info'
+  title: string
+  detail: string
+  fix?: { id: RepoFixId; label: string; destructive?: boolean }
+}
+
+export interface RepoHealth {
+  path: string
+  issues: RepoIssue[]
+  checkedAt: number
+}
+
+export type BulkAction = 'fetch' | 'pull' | 'push' | 'refresh'
+
+export interface BulkResult {
+  path: string
+  name: string
+  ok: boolean
+  skipped?: boolean
+  message: string
+}
+
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'none' | 'error' | 'disabled'
+  version?: string
+  notes?: string
+  percent?: number
+  error?: string
 }
 
 export interface ChangeBriefFile {

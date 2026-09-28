@@ -38,10 +38,8 @@ export const IcoStash = () => (
 )
 export const IcoLaunch = () => (
   <S>
-    <rect x="4" y="4" width="7" height="7" />
-    <rect x="13" y="4" width="7" height="7" />
-    <rect x="4" y="13" width="7" height="7" />
-    <rect x="13" y="13" width="7" height="7" />
+    <circle cx="10.5" cy="10.5" r="6.2" />
+    <path d="M15.2 15.2L21 21" strokeWidth="2" />
   </S>
 )
 export const IcoBranch = () => (
@@ -98,7 +96,26 @@ export const IcoChanges = () => (
 )
 export const IcoSpoon = () => (
   <S>
-    <ellipse cx="8" cy="8" rx="4" ry="5" />
-    <path d="M10.5 11 L20 20" strokeWidth="2.2" />
+    <ellipse cx="8.2" cy="8.2" rx="4.6" ry="5.8" />
+    <path d="M10.6 12.2c2.6 2.7 6.4 6.8 8.9 9.1" strokeWidth="2.15" />
+    <ellipse cx="7.3" cy="8.5" rx="2.2" ry="3.3" />
+  </S>
+)
+export const IcoHealth = () => (
+  <S>
+    <path d="M12 21s-7-4.4-7-10a4.5 4.5 0 0 1 7-3.5A4.5 4.5 0 0 1 19 11c0 5.6-7 10-7 10z" />
+  </S>
+)
+export const IcoRefresh = () => (
+  <S>
+    <path d="M20 12a8 8 0 1 1-2.2-5.5" />
+    <path d="M20 4v6h-6" />
+  </S>
+)
+export const IcoHelp = () => (
+  <S>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M9.5 9.2a2.5 2.5 0 1 1 3.6 2.2c-.8.5-1.1 1-1.1 1.8v.4" />
+    <path d="M12 17.2h.01" />
   </S>
 )

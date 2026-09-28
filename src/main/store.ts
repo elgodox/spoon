@@ -27,6 +27,13 @@ const defaults: Settings = {
   theme: 'system',
   fetchIntervalMin: 10,
   autoFetch: true,
+  autoFetchAll: false,
+  autoUpdate: true,
+  material: 'mica',
+  watchedRoots: [],
+  pinned: [],
+  onboarded: false,
+  editor: 'code',
   aiProvider: 'free',
   aiModels: { ...DEFAULT_AI_MODELS },
   aiEndpoints: [],
@@ -43,7 +50,8 @@ const defaults: Settings = {
   ignoreWhitespace: false,
   diffMode: 'unified',
   showAvatars: true,
-  glass: 40
+  glass: 40,
+  repoSort: 'opened'
 }
 
 function filePath(): string {
@@ -52,14 +60,20 @@ function filePath(): string {
   return join(dir, 'spoon.json')
 }
 
+let cache: StoreFile | null = null
+
 function load(): StoreFile {
+  if (cache) return cache
   try {
     const raw = readFileSync(filePath(), 'utf8')
     const parsed = JSON.parse(raw) as StoreFile
-    return {
+    const hadSettings = !!parsed.settings
+    cache = {
       settings: {
         ...defaults,
-        ...parsed.settings,
+        // Existing installs already know the app; only brand-new users get the tour.
+        onboarded: hadSettings && (parsed.recent?.length ?? 0) > 0,
+        ...(parsed.settings as Partial<Settings> | undefined),
         aiModels: { ...defaults.aiModels, ...(parsed.settings?.aiModels ?? {}) },
         aiEndpoints: parsed.settings?.aiEndpoints ?? []
       },
@@ -68,12 +82,14 @@ function load(): StoreFile {
       creds: parsed.creds ?? {}
     }
   } catch {
-    return { settings: { ...defaults }, recent: [], folders: [], creds: {} }
+    cache = { settings: { ...defaults }, recent: [], folders: [], creds: {} }
   }
+  return cache
 }
 
 function save(data: StoreFile): void {
-  writeFileSync(filePath(), JSON.stringify(data, null, 2), 'utf8')
+  cache = data
+  writeFileSync(filePath(), JSON.stringify(data), 'utf8')
 }
 
 export function getSettings(): Settings {
@@ -96,7 +112,7 @@ export function touchRepo(path: string, name: string): RepoSummary[] {
   data.recent = [
     { path, name, lastOpened: Date.now() },
     ...data.recent.filter((r) => r.path !== path)
-  ].slice(0, 100)
+  ].slice(0, 500)
   save(data)
   return data.recent
 }
@@ -108,7 +124,17 @@ export function touchRepos(repos: { path: string; name: string }[]): RepoSummary
   for (const repo of repos) {
     recent = [{ path: repo.path, name: repo.name, lastOpened: now }, ...recent.filter((r) => r.path !== repo.path)]
   }
-  data.recent = recent.slice(0, 100)
+  data.recent = recent.slice(0, 500)
+  save(data)
+  return data.recent
+}
+
+export function addRepos(repos: { path: string; name: string }[]): RepoSummary[] {
+  const data = load()
+  const known = new Set(data.recent.map((r) => r.path.toLowerCase()))
+  const fresh = repos.filter((r) => !known.has(r.path.toLowerCase())).map((r) => ({ ...r, lastOpened: 0 }))
+  if (!fresh.length) return data.recent
+  data.recent = [...data.recent, ...fresh].slice(0, 500)
   save(data)
   return data.recent
 }

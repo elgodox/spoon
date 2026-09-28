@@ -9,7 +9,7 @@ export default defineConfig({
   preload: {
     plugins: [externalizeDepsPlugin()]
   },
-  renderer: {
+    renderer: {
     server: {
       port: 5173,
       strictPort: false,
@@ -22,6 +22,12 @@ export default defineConfig({
         '@': resolve('src/renderer/src')
       }
     },
-    plugins: [react()]
+    plugins: [react()],
+    build: {
+      minify: true,
+      sourcemap: false,
+      cssCodeSplit: true,
+      reportCompressedSize: false
+    }
   }
 })

@@ -6,7 +6,7 @@ const root = document.getElementById('root')!
 
 if (!window.spoon) {
   root.innerHTML =
-    '<div style="font:14px Segoe UI;padding:32px">Spoon could not connect to the desktop process. Close this window and run <code>npm run dev</code> from D:\\GitHub\\spoon.</div>'
+    '<div style="font:14px Segoe UI;padding:32px">Spoon could not connect to the desktop process. Close this window and run <code>npm run dev</code>.</div>'
 } else {
   createRoot(root).render(<App />)
 }

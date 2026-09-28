@@ -8,46 +8,71 @@ import {
   nativeTheme,
   clipboard
 } from 'electron'
+import { spawn, execFile } from 'node:child_process'
 import { existsSync, mkdirSync, watch as fsWatch, writeFileSync, type FSWatcher } from 'node:fs'
+import { release } from 'node:os'
 import { join } from 'node:path'
-import type { ActivityItem, AiEndpointConfig, AiProviderId, CommitOptions, FetchOptions, PullOptions, PushOptions, RebaseTodoItem, Settings } from '../shared/types'
+import type {
+  ActivityItem,
+  AiEndpointConfig,
+  AiProviderId,
+  BulkAction,
+  BulkResult,
+  CommitOptions,
+  FetchOptions,
+  PullOptions,
+  PushOptions,
+  RebaseTodoItem,
+  RepoFixId,
+  Settings,
+  WindowMaterial
+} from '../shared/types'
 import * as git from './git'
 import * as store from './store'
 import * as oauth from './oauth'
+import * as updater from './updater'
 import { analyzeRepository, generateCommitMessage } from './ai'
 import { listProviderModels } from './model-catalog'
 
 app.commandLine.appendSwitch('disable-gpu-sandbox')
+app.setAppUserModelId('com.spoon.git')
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit()
+  process.exit(0)
+}
 
 let mainWindow: BrowserWindow | null = null
 const watchers = new Map<string, { close: () => void }>()
 const snapInflight = new Map<string, Promise<unknown>>()
 const activity: { id: string; time: number; title: string; command?: string; output?: string; status: 'running' | 'ok' | 'error' }[] = []
+let fetchTimer: NodeJS.Timeout | null = null
 
-function glassAmount(): number {
-  return Math.max(0, Math.min(80, store.getSettings().glass ?? 40))
-}
+const WINDOWS_BUILD = process.platform === 'win32' ? Number(release().split('.')[2] ?? 0) : 0
 
-function withAlpha(hex: string, alpha: number): string {
-  const a = Math.round(Math.max(0, Math.min(1, alpha)) * 255)
-    .toString(16)
-    .padStart(2, '0')
-  return `${hex}${a}`
+function effectiveMaterial(): WindowMaterial {
+  const s = store.getSettings()
+  if ((s.glass ?? 40) <= 0) return 'none'
+  // BrowserWindow materials need Windows 11 22H2 (build 22621); earlier builds would paint black.
+  if (WINDOWS_BUILD < 22621) return 'none'
+  return s.material ?? 'mica'
 }
 
 function windowChrome() {
   const dark = nativeTheme.shouldUseDarkColors
-  const glass = glassAmount()
-  const bar = dark ? '#2d2d2d' : '#f3f3f3'
-  const fill = dark ? '#1e1e1e' : '#ffffff'
-  const overlayAlpha = glass > 0 ? 1 - glass / 160 : 1
+  const material = effectiveMaterial()
   return {
     dark,
-    glass,
-    background: glass > 0 ? withAlpha(fill, 0.18) : fill,
-    bar: glass > 0 ? withAlpha(bar, overlayAlpha) : bar,
-    symbol: dark ? '#f5f5f5' : '#1a1a1a'
+    material,
+    background: material !== 'none' ? '#00000000' : dark ? '#17171c' : '#f6f6f9',
+    bar: material !== 'none' ? '#00000000' : dark ? '#17171c' : '#f6f6f9',
+    symbol: dark ? '#f2f2f7' : '#1c1c22'
   }
+}
+
+function chromeInfo() {
+  const c = windowChrome()
+  return { dark: c.dark, material: c.material, build: WINDOWS_BUILD }
 }
 
 function syncNativeTheme(): void {
@@ -64,29 +89,32 @@ function paintWindowChrome(): void {
   mainWindow.setBackgroundColor(colors.background)
   if (process.platform === 'win32') {
     try {
-      mainWindow.setBackgroundMaterial(colors.glass > 0 ? 'acrylic' : 'none')
+      if (WINDOWS_BUILD >= 22621) mainWindow.setBackgroundMaterial(colors.material)
     } catch {
-      /* Windows 10 or older */
+      /* material not supported on this build */
     }
-    mainWindow.setTitleBarOverlay({ color: colors.bar, symbolColor: colors.symbol, height: 32 })
+    mainWindow.setTitleBarOverlay({ color: colors.bar, symbolColor: colors.symbol, height: 40 })
   }
+  send('chrome', chromeInfo())
 }
 
 function createWindow(): void {
   const colors = windowChrome()
+  const bounds = store.getSettings().windowBounds
   mainWindow = new BrowserWindow({
-    width: 1360,
-    height: 860,
-    minWidth: 960,
-    minHeight: 600,
-    show: true,
+    ...(bounds
+      ? { width: bounds.width, height: bounds.height, x: bounds.x, y: bounds.y }
+      : { width: 1400, height: 880 }),
+    minWidth: 980,
+    minHeight: 620,
+    show: false,
     backgroundColor: colors.background,
-    backgroundMaterial: process.platform === 'win32' && colors.glass > 0 ? 'acrylic' : undefined,
-    autoHideMenuBar: false,
+    backgroundMaterial: process.platform === 'win32' && colors.material !== 'none' ? colors.material : undefined,
+    autoHideMenuBar: true,
     titleBarStyle: process.platform === 'win32' ? 'hidden' : 'default',
     titleBarOverlay:
       process.platform === 'win32'
-        ? { color: colors.bar, symbolColor: colors.symbol, height: 32 }
+        ? { color: colors.bar, symbolColor: colors.symbol, height: 40 }
         : undefined,
     icon: app.isPackaged
       ? join(process.resourcesPath, 'icon.png')
@@ -101,8 +129,14 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.show()
-  mainWindow.focus()
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show()
+    mainWindow?.focus()
+  })
+  mainWindow.on('close', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    store.patchSettings({ windowBounds: mainWindow.getBounds() })
+  })
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
     void dialog.showMessageBox(mainWindow!, {
       type: 'error',
@@ -151,9 +185,115 @@ async function withActivity<T>(title: string, command: string, fn: () => Promise
   }
 }
 
+async function bulk(action: BulkAction, paths: string[]): Promise<BulkResult[]> {
+  const run = git.limiter(action === 'refresh' ? 8 : 4)
+  let done = 0
+  const title = { fetch: 'Fetch all', pull: 'Pull all', push: 'Push all', refresh: 'Refresh all' }[action]
+  return withActivity(title, `${paths.length} repositories`, () =>
+    Promise.all(
+      paths.map((path) =>
+        run(async (): Promise<BulkResult> => {
+          const name = path.split(/[\\/]/).pop() || path
+          const result = await bulkOne(action, path, name).catch(
+            (err): BulkResult => ({ path, name, ok: false, message: err instanceof Error ? err.message.split('\n')[0] : String(err) })
+          )
+          send('bulk:progress', { done: ++done, total: paths.length, result })
+          return result
+        })
+      )
+    )
+  )
+}
+
+async function bulkOne(action: BulkAction, path: string, name: string): Promise<BulkResult> {
+  const skip = (message: string): BulkResult => ({ path, name, ok: true, skipped: true, message })
+  if (!existsSync(path)) return { path, name, ok: false, message: 'Folder not found' }
+  if (action === 'refresh') return { path, name, ok: true, message: 'Refreshed' }
+  if (action === 'fetch') {
+    const remotes = await git.getRemotes(path)
+    if (!remotes.length) return skip('No remote')
+    await git.fetchRemote(path, { all: true, prune: true })
+    return { path, name, ok: true, message: 'Fetched' }
+  }
+  const o = await git.overview(path)
+  if (o.error) return { path, name, ok: false, message: o.error }
+  if (o.operation) return skip(`${o.operation} in progress`)
+  if (o.detached) return skip('Detached HEAD')
+  if (!o.upstream) return skip('No upstream')
+  if (action === 'pull') {
+    if (!o.behind) return skip('Up to date')
+    if (o.staged + o.unstaged + o.conflicts > 0) return skip('Has local changes')
+    if (o.ahead) return skip('Diverged, pull it manually')
+    await git.git(path, ['pull', '--ff-only'])
+    return { path, name, ok: true, message: `Pulled ${o.behind} commit(s)` }
+  }
+  if (!o.ahead) return skip('Nothing to push')
+  if (o.behind) return skip('Behind remote, pull first')
+  await git.git(path, ['push'])
+  return { path, name, ok: true, message: `Pushed ${o.ahead} commit(s)` }
+}
+
+function which(cmd: string): Promise<boolean> {
+  return new Promise((r) => execFile('where', [cmd], { windowsHide: true }, (err) => r(!err)))
+}
+
+async function openIn(path: string, target: 'editor' | 'terminal' | 'explorer'): Promise<string> {
+  if (!existsSync(path)) throw new Error('That folder no longer exists.')
+  const detached = { detached: true, stdio: 'ignore' as const, windowsHide: true, cwd: path }
+  if (target === 'explorer') {
+    await shell.openPath(path)
+    return 'Explorer'
+  }
+  if (target === 'terminal') {
+    if (await which('wt')) {
+      spawn('wt', ['-d', path], detached).unref()
+      return 'Windows Terminal'
+    }
+    const ps = (await which('pwsh')) ? 'pwsh' : 'powershell'
+    spawn(ps, ['-NoExit', '-NoLogo'], { ...detached, windowsHide: false }).unref()
+    return ps
+  }
+  const preferred = store.getSettings().editor ?? 'code'
+  const editors = preferred === 'explorer' ? [] : [preferred, preferred === 'code' ? 'cursor' : 'code']
+  for (const cmd of editors) {
+    if (await which(cmd)) {
+      spawn('cmd', ['/c', cmd, '.'], detached).unref()
+      return cmd === 'code' ? 'VS Code' : 'Cursor'
+    }
+  }
+  await shell.openPath(path)
+  return 'Explorer'
+}
+
+function scheduleFetch(): void {
+  if (fetchTimer) clearInterval(fetchTimer)
+  fetchTimer = null
+  const s = store.getSettings()
+  if (!s.autoFetch) return
+  fetchTimer = setInterval(() => {
+    const now = store.getSettings()
+    if (!now.autoFetch) return
+    if (now.autoFetchAll) {
+      const paths = store
+        .getRecent()
+        .filter((r) => r.lastOpened > 0 || now.pinned?.includes(r.path))
+        .slice(0, 40)
+        .map((r) => r.path)
+      void bulk('fetch', paths).then(() => send('bulk:done', 'fetch'))
+    }
+    send('auto-fetch')
+  }, Math.max(1, s.fetchIntervalMin) * 60_000)
+}
+
 function watchRepo(repoPath: string): void {
   if (watchers.has(repoPath)) return
-  const gitDir = join(repoPath, '.git')
+  watchers.set(repoPath, { close: () => undefined })
+  void git.gitDirOf(repoPath).then((gitDir) => {
+    if (watchers.has(repoPath)) watchGitDir(repoPath, gitDir)
+  })
+}
+
+function watchGitDir(repoPath: string, gitDir: string): void {
   const handles: FSWatcher[] = []
   let timer: NodeJS.Timeout | null = null
   const ping = () => {
@@ -203,6 +343,8 @@ function buildMenu(): void {
         { label: 'Open Repository…', accelerator: 'Ctrl+O', click: () => sendMenu('open') },
         { label: 'Create New Repository…', click: () => sendMenu('init') },
         { type: 'separator' },
+        { label: 'Scan Folders for Repositories…', click: () => sendMenu('scan') },
+        { type: 'separator' },
         { label: 'Preferences…', accelerator: 'Ctrl+,', click: () => sendMenu('settings') },
         { type: 'separator' },
         { role: 'quit', label: 'Exit' }
@@ -224,6 +366,8 @@ function buildMenu(): void {
       label: 'View',
       submenu: [
         { label: 'Quick Launch', accelerator: 'Ctrl+P', click: () => sendMenu('quick') },
+        { label: 'Command Palette', accelerator: 'Ctrl+K', click: () => sendMenu('quick') },
+        { label: 'Home', accelerator: 'Ctrl+H', click: () => sendMenu('home') },
         { label: 'Changes', accelerator: 'Ctrl+1', click: () => sendMenu('changes') },
         { label: 'History', accelerator: 'Ctrl+2', click: () => sendMenu('commits') },
         { type: 'separator' },
@@ -259,7 +403,11 @@ function buildMenu(): void {
         },
         { type: 'separator' },
         { label: 'New Branch…', accelerator: 'Ctrl+Shift+B', click: () => sendMenu('branch') },
-        { label: 'Stash', click: () => sendMenu('stash') }
+        { label: 'Stash', click: () => sendMenu('stash') },
+        { type: 'separator' },
+        { label: 'Health Check…', accelerator: 'Ctrl+Shift+H', click: () => sendMenu('health') },
+        { label: 'Open in Editor', accelerator: 'Ctrl+Shift+E', click: () => sendMenu('open-editor') },
+        { label: 'Open in Terminal', accelerator: 'Ctrl+`', click: () => sendMenu('open-terminal') }
       ]
     },
     {
@@ -282,6 +430,8 @@ function buildMenu(): void {
           }
         },
         { type: 'separator' },
+        { label: 'Take the Tour', click: () => sendMenu('tour') },
+        { label: 'Check for Updates…', click: () => sendMenu('check-updates') },
         { label: 'About Spoon', click: () => sendMenu('about') }
       ]
     }
@@ -293,11 +443,43 @@ function registerIpc(): void {
   ipcMain.handle('app:settings', () => store.getSettings())
   ipcMain.handle('app:patchSettings', (_e, patch: Partial<Settings>) => {
     const settings = store.patchSettings(patch)
-    if (patch.theme !== undefined || patch.glass !== undefined) syncNativeTheme()
+    if (patch.theme !== undefined || patch.glass !== undefined || patch.material !== undefined) syncNativeTheme()
+    if (patch.autoFetch !== undefined || patch.fetchIntervalMin !== undefined || patch.autoFetchAll !== undefined) scheduleFetch()
+    if (patch.autoUpdate !== undefined) updater.schedule(settings.autoUpdate)
     return settings
   })
   ipcMain.handle('app:recent', () => store.getRecent())
-  ipcMain.handle('app:removeRecent', (_e, path: string) => store.removeRecent(path))
+  ipcMain.handle('app:removeRecent', (_e, path: string) => {
+    const s = store.getSettings()
+    if (s.pinned?.includes(path)) store.patchSettings({ pinned: s.pinned.filter((p) => p !== path) })
+    unwatchRepo(path)
+    return store.removeRecent(path)
+  })
+  ipcMain.handle('app:chrome', () => chromeInfo())
+  ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle('app:openIn', (_e, path: string, target: 'editor' | 'terminal' | 'explorer') => openIn(path, target))
+  ipcMain.handle('app:update', () => updater.current())
+  ipcMain.handle('app:checkUpdate', () => updater.check())
+  ipcMain.handle('app:installUpdate', () => updater.install())
+  ipcMain.handle('repo:overview', (_e, paths: string[]) => {
+    const run = git.limiter(6)
+    return Promise.all(paths.map((p) => run(() => git.overview(p))))
+  })
+  ipcMain.handle('repo:health', (_e, path: string, deep?: boolean) => git.health(path, !!deep))
+  ipcMain.handle('repo:fix', async (_e, path: string, fix: RepoFixId, input?: { name?: string; email?: string }) => {
+    if (fix === 'remove-missing') {
+      unwatchRepo(path)
+      store.removeRecent(path)
+      return 'Removed from the list'
+    }
+    return withActivity('Repair', fix, () => git.applyFix(path, fix, input))
+  })
+  ipcMain.handle('repo:bulk', (_e, action: BulkAction, paths: string[]) => bulk(action, paths))
+  ipcMain.handle('repo:rescan', async () => {
+    const roots = store.getSettings().watchedRoots ?? []
+    if (!roots.length) return store.getRecent()
+    return store.addRepos(await git.scanRepos(roots))
+  })
   ipcMain.handle('app:activity', () => activity)
   ipcMain.handle('app:openExternal', (_e, url: string) => shell.openExternal(url))
   ipcMain.handle('app:showItem', (_e, path: string) => shell.showItemInFolder(path))
@@ -314,7 +496,7 @@ function registerIpc(): void {
     })
     return r.canceled ? null : r.filePaths
   })
-  ipcMain.handle('app:addRepos', (_e, repos: { path: string; name: string }[]) => store.touchRepos(repos))
+  ipcMain.handle('app:addRepos', (_e, repos: { path: string; name: string }[]) => store.addRepos(repos))
   ipcMain.handle('git:scan', async (_e, roots: string[]) =>
     git.scanRepos(roots, (info) => send('scan:progress', info))
   )
@@ -385,15 +567,6 @@ function registerIpc(): void {
   ipcMain.handle('git:stageAll', (_e, path: string) => git.stageAll(path))
   ipcMain.handle('git:unstageAll', (_e, path: string) => git.unstageAll(path))
   ipcMain.handle('git:discard', async (_e, path: string, files: string[]) => {
-    const ok = await dialog.showMessageBox(mainWindow!, {
-      type: 'warning',
-      buttons: ['Cancel', 'Discard'],
-      defaultId: 1,
-      cancelId: 0,
-      message: `Discard changes in ${files.length} file(s)?`,
-      detail: 'This cannot be undone.'
-    })
-    if (ok.response !== 1) return false
     await git.discard(path, files)
     return true
   })
@@ -441,18 +614,9 @@ function registerIpc(): void {
   ipcMain.handle('git:revert', (_e, path: string, hashes: string[]) =>
     withActivity('Revert', 'git revert', () => git.revertCommits(path, hashes))
   )
-  ipcMain.handle('git:reset', async (_e, path: string, hash: string, mode: 'soft' | 'mixed' | 'hard') => {
-    if (mode === 'hard') {
-      const ok = await dialog.showMessageBox(mainWindow!, {
-        type: 'warning',
-        buttons: ['Cancel', 'Reset'],
-        message: 'Hard reset will discard local changes.',
-        defaultId: 0
-      })
-      if (ok.response !== 1) return
-    }
-    await git.resetTo(path, hash, mode)
-  })
+  ipcMain.handle('git:reset', (_e, path: string, hash: string, mode: 'soft' | 'mixed' | 'hard') =>
+    withActivity('Reset', `git reset --${mode} ${hash.slice(0, 7)}`, () => git.resetTo(path, hash, mode))
+  )
   ipcMain.handle('git:createTag', (_e, path: string, name: string, message?: string, hash?: string) =>
     git.createTag(path, name, message, hash)
   )
@@ -593,11 +757,12 @@ app.whenReady().then(async () => {
     paintWindowChrome()
     send('theme:native', nativeTheme.shouldUseDarkColors)
   })
-  try {
-    await git.findGit()
-  } catch (e) {
-    await dialog.showMessageBox({ type: 'error', message: e instanceof Error ? e.message : String(e) })
-  }
+  registerIpc()
+  buildMenu()
+  createWindow()
+  const gitReady = git.findGit().catch(async (e) => {
+    await dialog.showMessageBox(mainWindow!, { type: 'error', message: e instanceof Error ? e.message : String(e) })
+  })
   for (const provider of ['grok', 'chatgpt', 'claude'] as const) {
     if (!store.loadCreds(provider)) {
       try {
@@ -608,23 +773,25 @@ app.whenReady().then(async () => {
     }
   }
   oauth.applyFreeFallback()
-  registerIpc()
-  buildMenu()
-  createWindow()
 
-  const openArg = process.argv.find((a, i) => i > 0 && !a.startsWith('-') && existsSync(a))
+  const firstArg = app.isPackaged ? 1 : 2
+  const openArg = process.argv.find((a, i) => i >= firstArg && !a.startsWith('-') && existsSync(a))
   if (openArg) {
-    void git.isRepo(openArg).then((ok) => {
+    void gitReady.then(() => git.isRepo(openArg)).then((ok) => {
       if (ok) mainWindow?.webContents.once('did-finish-load', () => send('open-path', openArg))
     })
   }
 
-  const interval = () => {
-    const s = store.getSettings()
-    if (!s.autoFetch) return
-    send('auto-fetch')
-  }
-  setInterval(interval, Math.max(1, store.getSettings().fetchIntervalMin) * 60_000)
+  scheduleFetch()
+  updater.initUpdater((s) => send('update', s), store.getSettings().autoUpdate !== false)
+
+  app.on('second-instance', (_e, argv) => {
+    if (!mainWindow) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+    const target = argv.slice(1).find((a) => !a.startsWith('-') && existsSync(a))
+    if (target) void git.isRepo(target).then((ok) => ok && send('open-path', target))
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

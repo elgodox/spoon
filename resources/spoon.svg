@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#5B21B6"/>
+    </linearGradient>
+    <linearGradient id="metal" x1="0.15" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#EDE9FE"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <g transform="translate(512 512) rotate(-38) translate(-512 -512)">
+    <rect x="492" y="448" width="40" height="400" rx="20" fill="url(#metal)"/>
+    <ellipse cx="512" cy="292" rx="176" ry="218" fill="url(#metal)"/>
+    <!-- rim highlight only — a solid bowl, not a lens -->
+    <path fill="#FFFFFF" d="M400 250 C445 165 560 155 612 228 C540 200 460 218 400 250 Z"/>
+    <!-- soft inner shade, crescent, not a hole -->
+    <path fill="#6D28D9" opacity="0.14" d="M430 360 C470 430 560 430 600 355 C575 400 500 412 430 360 Z"/>
+  </g>
+</svg>
