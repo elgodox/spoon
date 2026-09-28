@@ -1,4 +1,4 @@
-export type ThemeMode = 'light' | 'dark' | 'system'
+export type ThemeMode = 'light' | 'dark'
 
 export type AiProviderId = string
 

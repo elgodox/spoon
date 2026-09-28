@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import type { BulkResult, RepoHealth, RepoIssue, RepoOverview, RepoSort, RepoSummary, Settings } from '../../shared/types'
 import {
   IcoAddRepo,
+  IcoChevron,
   IcoClone,
   IcoCode,
   IcoConsole,
@@ -20,7 +21,7 @@ import {
   IcoUnpin,
   IcoWrench
 } from './icons'
-import { bindDrag, clamp, catchErr, formatAgo } from './lib'
+import { avatarColor, bindDrag, clamp, catchErr, formatAgo, initials } from './lib'
 
 type StatusFilter = 'all' | 'dirty' | 'behind' | 'ahead' | 'blocked'
 
@@ -345,19 +346,7 @@ export function RepoHome({
             placeholder="Filter repositories..."
             aria-label="Filter repositories"
           />
-          <select
-            className="sort-select"
-            value={sort}
-            aria-label="Sort repositories"
-            onChange={(e) => void onSettings({ repoSort: e.target.value as RepoSort })}
-          >
-            <option value="opened">Last opened</option>
-            <option value="name">Name</option>
-            <option value="changes">With changes</option>
-            <option value="behind">Behind remote</option>
-            <option value="ahead">To push</option>
-            <option value="status">Needs attention</option>
-          </select>
+          <SortMenu value={sort} onChange={(next) => void onSettings({ repoSort: next })} />
         </div>
         <div className="side-sec">
           Repositories
@@ -548,9 +537,14 @@ export function RepoHome({
         {many ? (
           <div className="repo-card pop-in">
             <div className="repo-card-top">
-              <div>
-                <h2>{picked.length} repositories selected</h2>
-                <div className="hint">Shift-click a range to fetch, pull, pin, mark as safe, or remove only those repos.</div>
+              <div className="repo-id">
+                <span className="repo-mark" aria-hidden>
+                  {picked.length}
+                </span>
+                <div className="repo-id-copy">
+                  <h2>{picked.length} repositories selected</h2>
+                  <div className="hint">Shift-click a range to fetch, pull, pin, mark as safe, or remove only those repos.</div>
+                </div>
               </div>
             </div>
             <div className="repo-actions">
@@ -617,16 +611,29 @@ export function RepoHome({
         ) : current ? (
           <div className="repo-card pop-in">
             <div className="repo-card-top">
-              <div>
-                <h2>{current.name}</h2>
-                <div className="hint path">{current.path}</div>
+              <div className="repo-id">
+                <span className="repo-mark" aria-hidden style={{ background: avatarColor(current.path) }}>
+                  {initials(current.name.replace(/[-_]+/g, ' '))}
+                </span>
+                <div className="repo-id-copy">
+                  <h2 title={current.name}>{current.name}</h2>
+                  <div className="hint path" title={current.path}>
+                    {current.path}
+                  </div>
+                </div>
               </div>
               <RepoBadges overview={overview} analyzing={analyzing.has(current.path) || !overview} />
             </div>
             <div className="stat-row tight">
-              <span>{overview?.branch ? (overview.detached ? 'detached HEAD' : overview.branch) : '...'}</span>
-              {overview?.lastCommit && <span>{overview.lastCommit.subject}</span>}
-              <span>Opened {current.lastOpened ? formatAgo(current.lastOpened) : 'never'}</span>
+              <span className="branch-pill">
+                {overview?.branch ? (overview.detached ? 'detached HEAD' : overview.branch) : '...'}
+              </span>
+              {overview?.lastCommit && (
+                <span className="last-commit" title={overview.lastCommit.subject}>
+                  {overview.lastCommit.subject}
+                </span>
+              )}
+              <span className="opened">Opened {current.lastOpened ? formatAgo(current.lastOpened) : 'never'}</span>
             </div>
             {(analyzing.has(current.path) || !overview) && (
               <p className="hint">{overview ? 'Refreshing repository status...' : 'Analyzing...'}</p>
@@ -738,6 +745,106 @@ function StatChip({
   )
 }
 
+const SORT_OPTIONS: { value: RepoSort; label: string }[] = [
+  { value: 'opened', label: 'Last opened' },
+  { value: 'name', label: 'Name' },
+  { value: 'changes', label: 'With changes' },
+  { value: 'behind', label: 'Behind remote' },
+  { value: 'ahead', label: 'To push' },
+  { value: 'status', label: 'Needs attention' }
+]
+
+function SortMenu({ value, onChange }: { value: RepoSort; onChange: (value: RepoSort) => void }) {
+  const [open, setOpen] = useState(false)
+  const [hi, setHi] = useState(value)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const current = SORT_OPTIONS.find((o) => o.value === value) ?? SORT_OPTIONS[0]
+
+  useEffect(() => {
+    if (open) setHi(value)
+  }, [open, value])
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      setOpen(false)
+      btnRef.current?.focus()
+    }
+    document.addEventListener('pointerdown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const pick = (next: RepoSort) => {
+    onChange(next)
+    setOpen(false)
+    btnRef.current?.focus()
+  }
+
+  const move = (dir: 1 | -1) => {
+    const i = SORT_OPTIONS.findIndex((o) => o.value === hi)
+    const next = SORT_OPTIONS[(i + dir + SORT_OPTIONS.length) % SORT_OPTIONS.length]
+    setHi(next.value)
+  }
+
+  return (
+    <div className={`menu-select${open ? ' open' : ''}`} ref={wrapRef}>
+      <button
+        ref={btnRef}
+        type="button"
+        className="menu-select-btn"
+        aria-label="Sort repositories"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls="repo-sort-list"
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault()
+            if (!open) setOpen(true)
+            else move(e.key === 'ArrowDown' ? 1 : -1)
+            return
+          }
+          if (open && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault()
+            pick(hi)
+          }
+        }}
+      >
+        <span>{current.label}</span>
+        <IcoChevron />
+      </button>
+      {open && (
+        <ul id="repo-sort-list" className="menu-select-list" role="listbox" aria-label="Sort repositories">
+          {SORT_OPTIONS.map((o) => (
+            <li key={o.value} role="presentation">
+              <button
+                type="button"
+                role="option"
+                aria-selected={o.value === value}
+                className={`menu-select-opt${o.value === value ? ' on' : ''}${o.value === hi ? ' hi' : ''}`}
+                onMouseEnter={() => setHi(o.value)}
+                onClick={() => pick(o.value)}
+              >
+                {o.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 function IconAct({
   label,
   hint,
@@ -791,12 +898,14 @@ function HealthList({
   onDeep: () => void
 }) {
   const issues = health?.issues ?? []
+  const ok = !issues.length
   const canAuto = issues.some((i) => i.fix && !i.fix.destructive && i.fix.id !== 'set-identity')
   return (
-    <div className="health">
+    <div className={`health${ok ? ' ok' : ''}`}>
       <div className="health-head">
+        <span className={`health-dot${ok ? ' ok' : ' warn'}`} aria-hidden />
         <strong>Health</strong>
-        <span className="hint">{issues.length ? `${issues.length} issue${issues.length === 1 ? '' : 's'}` : 'Looks good'}</span>
+        <span className="hint">{ok ? 'Looks good' : `${issues.length} issue${issues.length === 1 ? '' : 's'}`}</span>
         <div className="cluster" role="toolbar" aria-label="Health actions">
           <IconAct bare label="Deep check" hint="Run git fsck" onClick={onDeep}>
             <IcoDeep />
@@ -808,7 +917,6 @@ function HealthList({
           )}
         </div>
       </div>
-      {!issues.length && <p className="hint">No problems detected. Deep check runs git fsck.</p>}
       {issues.map((issue) => (
         <div key={issue.id} className={`issue ${issue.severity}`}>
           <div>

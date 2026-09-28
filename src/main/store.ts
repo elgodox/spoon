@@ -1,4 +1,4 @@
-import { app, safeStorage } from 'electron'
+import { app, nativeTheme, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEFAULT_AI_MODELS, isFreeAiModel } from '../shared/models'
@@ -23,8 +23,13 @@ interface StoreFile {
   creds: Record<string, string>
 }
 
+function sanitizeTheme(theme: unknown): ThemeMode {
+  if (theme === 'light' || theme === 'dark') return theme
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+}
+
 const defaults: Settings = {
-  theme: 'system',
+  theme: 'dark',
   fetchIntervalMin: 10,
   autoFetch: true,
   autoFetchAll: false,
@@ -79,6 +84,7 @@ function load(): StoreFile {
         // Existing installs already know the app; only brand-new users get the tour.
         onboarded: hadSettings && (parsed.recent?.length ?? 0) > 0,
         ...(parsed.settings as Partial<Settings> | undefined),
+        theme: sanitizeTheme((parsed.settings as Partial<Settings> | undefined)?.theme),
         aiModels: sanitizeAiModels({ ...defaults.aiModels, ...(parsed.settings?.aiModels ?? {}) }),
         aiEndpoints: parsed.settings?.aiEndpoints ?? []
       },

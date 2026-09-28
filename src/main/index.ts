@@ -77,7 +77,7 @@ function chromeInfo() {
 
 function syncNativeTheme(): void {
   const mode = store.getSettings().theme
-  const source = mode === 'system' ? 'system' : mode
+  const source = mode === 'dark' ? 'dark' : 'light'
   if (nativeTheme.themeSource !== source) nativeTheme.themeSource = source
   paintWindowChrome()
   send('theme:native', nativeTheme.shouldUseDarkColors)

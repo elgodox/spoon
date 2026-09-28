@@ -33,7 +33,10 @@ import {
   IcoAi,
   IcoBranch,
   IcoChanges,
+  IcoChevron,
+  IcoClose,
   IcoConsole,
+  IcoCreate,
   IcoFetch,
   IcoHealth,
   IcoHelp,
@@ -44,6 +47,7 @@ import {
   IcoPush,
   IcoRefresh,
   IcoRemote,
+  IcoSettings,
   IcoSpoon,
   IcoStash,
   IcoTag,
@@ -64,6 +68,28 @@ import {
   laneColor,
   parentDir
 } from './lib'
+
+type PrefsTab = 'look' | 'git' | 'ai' | 'help'
+type AiPick = { type: 'provider'; id: AiProviderId } | { type: 'add'; id: string } | { type: 'custom' }
+const PREFS_TABS: { id: PrefsTab; label: string; Icon: () => ReactNode }[] = [
+  { id: 'look', label: 'Appearance', Icon: IcoTheme },
+  { id: 'git', label: 'Git', Icon: IcoBranch },
+  { id: 'ai', label: 'AI', Icon: IcoAi },
+  { id: 'help', label: 'Help', Icon: IcoHelp }
+]
+let lastPrefsTab: PrefsTab = 'look'
+let lastPrefsNav = false
+let lastAiNav = false
+
+function snapThemeTransitions() {
+  const style = document.createElement('style')
+  style.textContent = '*,*::before,*::after{transition:none !important}'
+  document.head.append(style)
+  void document.body.offsetHeight
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => style.remove())
+  })
+}
 
 type Tab = { id: string; kind: 'manager' | 'repo'; path?: string; name: string }
 type Snapshot = {
@@ -104,8 +130,7 @@ type Overlay =
   | { type: 'stash' }
   | { type: 'merge'; ref: string }
   | { type: 'rebase'; ref: string }
-  | { type: 'settings' }
-  | { type: 'about' }
+  | { type: 'settings'; tab?: PrefsTab }
   | { type: 'health' }
   | { type: 'blame'; file: string; rev?: string }
   | { type: 'history'; file: string }
@@ -167,10 +192,12 @@ export function App() {
   tabsRef.current = tabs
 
   const applyTheme = useCallback((mode: Settings['theme']) => {
-    const dark =
-      mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-    setTheme(dark ? 'dark' : 'light')
-    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+    const next = mode === 'dark' ? 'dark' : 'light'
+    setTheme((prev) => {
+      if (prev !== next) snapThemeTransitions()
+      return next
+    })
+    document.documentElement.dataset.theme = next
   }, [])
 
   const refreshModels = useCallback(async (force = false) => {
@@ -219,15 +246,8 @@ export function App() {
   }, [refreshModels, accounts])
 
   useEffect(() => {
-    return window.spoon.app.on('theme:native', (dark) => {
-      const mode = settingsRef.current?.theme ?? 'system'
-      if (mode === 'system') {
-        const isDark = Boolean(dark)
-        setTheme(isDark ? 'dark' : 'light')
-        document.documentElement.dataset.theme = isDark ? 'dark' : 'light'
-      } else {
-        applyTheme(mode)
-      }
+    return window.spoon.app.on('theme:native', () => {
+      applyTheme(settingsRef.current?.theme ?? 'dark')
     })
   }, [applyTheme])
 
@@ -291,7 +311,7 @@ export function App() {
         if (a === 'settings') setOverlay({ type: 'settings' })
         if (a === 'quick') setQuick(true)
         if (a === 'theme') void toggleTheme()
-        if (a === 'about') setOverlay({ type: 'about' })
+        if (a === 'about') setOverlay({ type: 'settings', tab: 'help' })
         if (a === 'tour') setTour(true)
         if (a === 'health') setOverlay({ type: 'health' })
         if (a === 'check-updates') void window.spoon.app.checkUpdate().then((s) => setUpdate(s as UpdateState))
@@ -399,6 +419,8 @@ export function App() {
 
   const snap = active.path ? snaps[active.path] : undefined
   const glass = settings?.glass ?? 40
+  const glassFill = glass <= 0 ? 100 : Math.max(70, 96 - glass * 0.32)
+  const glassContent = glass <= 0 ? 100 : Math.min(94, Math.max(82, 102 - glass * 0.22))
   const [confettiAt, setConfettiAt] = useState(0)
 
   useEffect(() => {
@@ -417,8 +439,9 @@ export function App() {
       className={`app ${busy ? 'busy' : ''} ${glass > 0 ? 'frost' : ''}`}
       data-theme={theme}
       style={{
-        ['--glass-fill' as string]: `${Math.max(14, 92 - glass)}%`,
-        ['--glass-blur' as string]: `${Math.round(8 + glass * 0.42)}px`
+        ['--glass-fill' as string]: `${glassFill}%`,
+        ['--glass-content' as string]: `${glassContent}%`,
+        ['--glass-blur' as string]: `${Math.round(10 + glass * 0.3)}px`
       }}
     >
       <div className="toolbar">
@@ -487,45 +510,50 @@ export function App() {
             <IcoConsole />
             <span>Console</span>
           </button>
-          <button className="tb-btn" data-tour="prefs" onClick={() => void toggleTheme()}>
-            <IcoTheme />
-            <span>Appearance</span>
-          </button>
           <button className="tb-btn" data-tour="home" onClick={goHome}>
             <IcoHome />
             <span>Home</span>
           </button>
-          <button className="tb-btn" data-tour="ai" onClick={() => setOverlay({ type: 'settings' })}>
-            <IcoAi />
-            <span>AI</span>
-          </button>
-          <button className="tb-btn" data-tour="help" onClick={() => setOverlay({ type: 'about' })}>
-            <IcoHelp />
-            <span>Help</span>
+          <button
+            className="tb-btn"
+            data-tour="prefs"
+            title="Appearance, AI, and Help"
+            onClick={() => setOverlay({ type: 'settings' })}
+          >
+            <IcoSettings />
+            <span>Settings</span>
           </button>
           <div className="caption-gap" />
         </div>
       </div>
 
-      <div className="tabs" data-tour="tabs">
-        {tabs.map((t) => (
-          <button key={t.id} className={`tab ${t.id === activeId ? 'active' : ''}`} onClick={() => setActiveId(t.id)}>
-            <span className="name">{t.name}</span>
-            {t.path && snap && t.path === active.path && snap.status.unstagedCount + snap.status.stagedCount > 0
-              ? '*'
-              : ''}
-            <span
-              className="x"
-              onClick={(e) => {
-                e.stopPropagation()
-                closeTab(t.id)
-              }}
+      <div className="tabs" data-tour="tabs" role="tablist">
+        {tabs.map((t) => {
+          const dirty =
+            !!t.path && !!snap && t.path === active.path && snap.status.unstagedCount + snap.status.stagedCount > 0
+          return (
+            <div
+              key={t.id}
+              className={`tab ${t.id === activeId ? 'active' : ''}`}
+              role="tab"
+              aria-selected={t.id === activeId}
             >
-              x
-            </span>
-          </button>
-        ))}
-        <button className="tab-add" onClick={openManager}>
+              <button type="button" className="tab-hit" onClick={() => setActiveId(t.id)}>
+                <span className="name">{t.name}</span>
+                {dirty ? <span className="tab-dirty">*</span> : null}
+              </button>
+              <button
+                type="button"
+                className="x"
+                aria-label={`Close ${t.name}`}
+                onClick={() => closeTab(t.id)}
+              >
+                <IcoClose />
+              </button>
+            </div>
+          )
+        })}
+        <button className="tab-add" onClick={openManager} aria-label="New tab">
           +
         </button>
       </div>
@@ -2187,41 +2215,15 @@ function DialogHost({
 }) {
   if (!overlay) return null
   if (overlay.type === 'settings')
-    return <SettingsDialog accounts={accounts} settings={settings} catalogs={catalogs} onClose={onClose} onSaved={onSettings} />
-  if (overlay.type === 'about')
     return (
-      <Modal title="Help" onClose={onClose}>
-        <p>Spoon is a Git client for Windows. Scan or clone repositories from Home, then fetch, pull, and commit from the toolbar.</p>
-        <p>AI message only fills the commit box. AI commit stays local unless you push yourself.</p>
-        <div className="row-btns" style={{ marginTop: 12 }}>
-          <button
-            className="ghost"
-            onClick={() => {
-              onClose()
-              window.setTimeout(() => document.dispatchEvent(new CustomEvent('spoon-tour')), 50)
-            }}
-          >
-            Take the tour
-          </button>
-          <button
-            className="ghost"
-            onClick={() => {
-              void window.spoon.app.checkUpdate()
-              onClose()
-            }}
-          >
-            Check for updates
-          </button>
-          <button className="ghost" onClick={() => void window.spoon.app.openExternal('https://github.com/elgodox/spoon')}>
-            GitHub
-          </button>
-        </div>
-        <div className="dialog-foot">
-          <button className="primary" onClick={onClose}>
-            Close
-          </button>
-        </div>
-      </Modal>
+      <SettingsDialog
+        initialTab={overlay.tab}
+        accounts={accounts}
+        settings={settings}
+        catalogs={catalogs}
+        onClose={onClose}
+        onSaved={onSettings}
+      />
     )
   if (overlay.type === 'health' && path)
     return <HealthDialog path={path} onClose={onClose} />
@@ -2702,22 +2704,27 @@ function SettingsDialog({
   accounts,
   settings,
   catalogs,
+  initialTab,
   onClose,
   onSaved
 }: {
   accounts: AiAccount[]
   settings: Settings | null
   catalogs: Record<AiProviderId, AiModelCatalog>
+  initialTab?: PrefsTab
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
-  const [tab, setTab] = useState<'look' | 'git' | 'ai'>('ai')
+  const [tab, setTab] = useState<PrefsTab>(initialTab ?? lastPrefsTab)
+  const [navCollapsed, setNavCollapsed] = useState(lastPrefsNav)
+  const [aiNavCollapsed, setAiNavCollapsed] = useState(lastAiNav)
+  const [aiPick, setAiPick] = useState<AiPick>({ type: 'provider', id: settings?.aiProvider ?? 'free' })
+  const [version, setVersion] = useState('')
   const [key, setKey] = useState('')
   const [provider, setProvider] = useState<AiProviderId>(settings?.aiProvider ?? 'free')
   const [acc, setAcc] = useState(accounts)
   const [local, setLocal] = useState<Record<string, { available: boolean; label?: string }>>({})
   const [device, setDevice] = useState<{ userCode: string; url: string } | null>(null)
-  const [adding, setAdding] = useState<string | null>(null)
   const [addKey, setAddKey] = useState('')
   const [addModel, setAddModel] = useState('')
   const [customName, setCustomName] = useState('')
@@ -2732,7 +2739,22 @@ function SettingsDialog({
     void window.spoon.ai.local().then(setLocal)
   }, [])
   useEffect(() => {
-    if (settings?.aiProvider) setProvider(settings.aiProvider)
+    void window.spoon.app.version().then(setVersion)
+  }, [])
+  useEffect(() => {
+    lastPrefsTab = tab
+  }, [tab])
+  useEffect(() => {
+    lastPrefsNav = navCollapsed
+  }, [navCollapsed])
+  useEffect(() => {
+    lastAiNav = aiNavCollapsed
+  }, [aiNavCollapsed])
+  useEffect(() => {
+    if (settings?.aiProvider) {
+      setProvider(settings.aiProvider)
+      setAiPick((prev) => (prev.type === 'provider' ? { type: 'provider', id: settings.aiProvider } : prev))
+    }
   }, [settings?.aiProvider])
   useEffect(() => {
     setAcc(accounts)
@@ -2745,6 +2767,7 @@ function SettingsDialog({
 
   async function selectProvider(id: AiProviderId) {
     setProvider(id)
+    setAiPick({ type: 'provider', id })
     await window.spoon.app.patchSettings({ aiProvider: id })
     await onSaved()
   }
@@ -2758,10 +2781,10 @@ function SettingsDialog({
       }
       const result = (await window.spoon.ai.addEndpoint(endpoint, apiKey)) as { accounts: AiAccount[] }
       setAcc(result.accounts)
-      setAdding(null)
       setAddKey('')
       setAddModel('')
       setProvider(site.id)
+      setAiPick({ type: 'provider', id: site.id })
       await onSaved()
     } catch (error) {
       await window.spoon.app.error(error instanceof Error ? error.message : String(error))
@@ -2799,26 +2822,70 @@ function SettingsDialog({
 
   const yours = listedProviderIds(settings)
   const catalogLeft = AI_SITE_CATALOG.filter((site) => !addedIds.has(site.id) && !BUILTIN_AI_IDS.includes(site.id))
+  const siteAdding = aiPick.type === 'add' ? catalogLeft.find((s) => s.id === aiPick.id) : undefined
+
+  function providerStatus(p: AiProviderId) {
+    const a = acc.find((x) => x.provider === p)
+    if (p === 'free') return { connected: true, text: 'Ready - no account' }
+    if (a?.connected) return { connected: true, text: `Connected${a.label ? ` - ${a.label}` : ''}` }
+    return { connected: false, text: 'Not connected' }
+  }
 
   return (
-    <Modal title="Preferences" onClose={onClose} wide className="prefs">
-      <div className="prefs-tabs" role="tablist">
-        <button type="button" role="tab" className={tab === 'look' ? 'on' : ''} aria-selected={tab === 'look'} onClick={() => setTab('look')}>
-          Appearance
-        </button>
-        <button type="button" role="tab" className={tab === 'git' ? 'on' : ''} aria-selected={tab === 'git'} onClick={() => setTab('git')}>
-          Git
-        </button>
-        <button type="button" role="tab" className={tab === 'ai' ? 'on' : ''} aria-selected={tab === 'ai'} onClick={() => setTab('ai')}>
-          AI
-        </button>
-      </div>
+    <div className="dialog-back" onMouseDown={onClose}>
+      <div className="dialog wide prefs" onMouseDown={(e) => e.stopPropagation()}>
+        <div className={`prefs-layout ${navCollapsed ? 'collapsed' : ''}`}>
+          <nav
+            className="rail"
+            aria-label="Preferences"
+            onKeyDown={(e) => {
+              if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+              e.preventDefault()
+              const i = PREFS_TABS.findIndex((item) => item.id === tab)
+              const next = e.key === 'ArrowDown' ? (i + 1) % PREFS_TABS.length : (i - 1 + PREFS_TABS.length) % PREFS_TABS.length
+              setTab(PREFS_TABS[next].id)
+            }}
+          >
+            <button
+              type="button"
+              className="rail-toggle"
+              aria-expanded={!navCollapsed}
+              aria-label={navCollapsed ? 'Expand menu' : 'Collapse menu'}
+              title={navCollapsed ? 'Expand menu' : 'Collapse menu'}
+              onClick={() => setNavCollapsed((v) => !v)}
+            >
+              <span className={`rail-chevron ${navCollapsed ? 'flip' : ''}`} aria-hidden="true">
+                <IcoChevron />
+              </span>
+              <span className="rail-label">Menu</span>
+            </button>
+            {PREFS_TABS.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`rail-item ${tab === item.id ? 'on' : ''}`}
+                aria-current={tab === item.id ? 'page' : undefined}
+                title={item.label}
+                onClick={() => setTab(item.id)}
+              >
+                <span className="rail-ico" aria-hidden="true">
+                  <item.Icon />
+                </span>
+                <span className="rail-label">{item.label}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="prefs-col">
+            <div className="dialog-head">
+              <h2>Preferences</h2>
+            </div>
+            <div className="prefs-main">
 
       {tab === 'look' && (
-        <section className="prefs-pane">
+        <section className="prefs-pane" role="tabpanel" id="prefs-panel-look" aria-labelledby="prefs-tab-look">
           <h3>Theme</h3>
           <div className="seg">
-            {(['light', 'dark', 'system'] as const).map((t) => (
+            {(['light', 'dark'] as const).map((t) => (
               <button
                 key={t}
                 className={settings?.theme === t ? 'on' : ''}
@@ -2827,7 +2894,7 @@ function SettingsDialog({
                   await onSaved()
                 }}
               >
-                {t === 'system' ? 'Match Windows' : t === 'dark' ? 'Dark' : 'Light'}
+                {t === 'dark' ? 'Dark' : 'Light'}
               </button>
             ))}
           </div>
@@ -2842,7 +2909,7 @@ function SettingsDialog({
               void window.spoon.app.patchSettings({ glass }).then(() => void onSaved())
             }}
           />
-          <p className="hint">{settings?.glass ?? 40}% blur on the toolbar, tabs and branch sidebar. 0 is solid.</p>
+          <p className="hint">{settings?.glass ?? 40}% frost. Toolbar and sidebar show the window texture. Panels stay readable. 0 is solid.</p>
           <h3>Window material</h3>
           <div className="seg">
             {(['mica', 'acrylic', 'none'] as const).map((m) => (
@@ -2859,20 +2926,11 @@ function SettingsDialog({
             ))}
           </div>
           <p className="hint">Mica and acrylic need Windows 11. Acrylic is more transparent.</p>
-          <button
-            className="ghost"
-            onClick={() => {
-              onClose()
-              window.setTimeout(() => document.dispatchEvent(new CustomEvent('spoon-tour')), 50)
-            }}
-          >
-            Take the tour
-          </button>
         </section>
       )}
 
       {tab === 'git' && (
-        <section className="prefs-pane">
+        <section className="prefs-pane" role="tabpanel" id="prefs-panel-git" aria-labelledby="prefs-tab-git">
           <h3>Automatic fetch</h3>
           <label className="check">
             <input
@@ -2943,252 +3001,335 @@ function SettingsDialog({
       )}
 
       {tab === 'ai' && (
-        <section className="prefs-pane">
+        <section className="prefs-pane ai-pane" id="prefs-panel-ai">
           <p className="hint">
             AI message fills the box. AI commit stays local. Free AI needs no account. For a reliable key, add OpenRouter
-            (create an account at openrouter.ai) from the catalog below.
+            (create an account at openrouter.ai) from the catalog.
           </p>
-
-          <div className="ai-active">
-            <div className="ai-active-top">
-              <span className="ai-mark">
-                <ProviderIcon id={provider} label={providerLabel(provider, endpoints)} />
-              </span>
-              <div>
-                <strong>{providerLabel(provider, endpoints)}</strong>
-                <p className="hint">Active provider</p>
-              </div>
-            </div>
-            <ModelField provider={provider} settings={settings} catalog={catalogs[provider]} onSaved={onSaved} />
-          </div>
-
-          <h3>Your providers</h3>
-          <div className="ai-grid">
-            {yours.map((p) => {
-              const a = acc.find((x) => x.provider === p)
-              const endpoint = endpoints.find((item) => item.id === p)
-              const connected = p === 'free' || !!a?.connected
-              const selected = provider === p
-              return (
-                <div key={p} className={`ai-card ${selected ? 'on' : ''}`}>
-                  <button type="button" className="ai-card-hit" onClick={() => void selectProvider(p)}>
-                    <span className="ai-mark">
+          <div className={`ai-layout ${aiNavCollapsed ? 'collapsed' : ''}`}>
+            <nav className="rail ai-rail" aria-label="AI providers">
+              <button
+                type="button"
+                className="rail-toggle"
+                aria-expanded={!aiNavCollapsed}
+                aria-label={aiNavCollapsed ? 'Expand providers' : 'Collapse providers'}
+                title={aiNavCollapsed ? 'Expand providers' : 'Collapse providers'}
+                onClick={() => setAiNavCollapsed((v) => !v)}
+              >
+                <span className={`rail-chevron ${aiNavCollapsed ? 'flip' : ''}`} aria-hidden="true">
+                  <IcoChevron />
+                </span>
+                <span className="rail-label">Providers</span>
+              </button>
+              <div className="rail-kicker">Yours</div>
+              {yours.map((p) => {
+                const st = providerStatus(p)
+                const selected = aiPick.type === 'provider' && aiPick.id === p
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    className={`rail-item ${selected ? 'on' : ''}`}
+                    title={providerLabel(p, endpoints)}
+                    onClick={() => void selectProvider(p)}
+                  >
+                    <span className="ai-mark sm">
                       <ProviderIcon id={p} label={providerLabel(p, endpoints)} />
                     </span>
-                    <span className="ai-card-copy">
-                      <b>{providerLabel(p, endpoints)}</b>
-                      <span className={connected ? 'pill-on' : 'hint'}>
-                        {p === 'free' ? 'Ready - no account' : connected ? `Connected${a?.label ? ` - ${a.label}` : ''}` : 'Not connected'}
-                      </span>
+                    <span className="rail-copy">
+                      <span className="rail-label">{providerLabel(p, endpoints)}</span>
+                      <span className={st.connected ? 'pill-on' : 'hint'}>{st.text}</span>
                     </span>
                   </button>
-                  {selected && p === 'free' && (
-                    <div className="ai-card-body">
-                      <p className="hint">
-                        Anonymous Pollinations GPT-OSS. If a request fails, add OpenRouter below and create a free account
-                        at openrouter.ai.
-                      </p>
-                    </div>
-                  )}
-                  {selected && p !== 'free' && (
-                    <div className="ai-card-body">
-                      {BUILTIN_AI_IDS.includes(p) && (
-                        <div className="row-btns">
-                          {local[p]?.available && (
-                            <div className="ai-local">
-                              <button
-                                className="ghost"
-                                title={local[p].label ? `Use local session (${local[p].label})` : 'Use local session'}
-                                onClick={async () => { await window.spoon.ai.importLocal(p); await refresh() }}
-                              >
-                                Use local session
-                              </button>
-                              {local[p].label && (
-                                <span className="hint ai-mail" title={local[p].label}>
-                                  {local[p].label}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {p === 'grok' && (
-                            <button
-                              className="ghost"
-                              onClick={async () => {
-                                try {
-                                  await window.spoon.ai.grokPkce()
-                                  await refresh()
-                                } catch {
-                                  const flow = (await window.spoon.ai.grokDevice()) as { userCode: string; verificationUrl: string }
-                                  setDevice({ userCode: flow.userCode, url: flow.verificationUrl })
-                                  await window.spoon.ai.grokPoll(flow)
-                                  setDevice(null)
-                                  await refresh()
-                                }
-                              }}
-                            >
-                              Sign in with Grok
-                            </button>
-                          )}
-                          <button className="ghost" onClick={() => void window.spoon.ai.openConsole(p)}>
-                            Get key
-                          </button>
-                          {a?.connected && (
-                            <button className="ghost" onClick={async () => { await window.spoon.ai.disconnect(p); await refresh() }}>
-                              Disconnect
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {PAID_AI_PROVIDERS.includes(p) && (
-                        <div className="row-btns">
-                          <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste API key" />
-                          <button
-                            className="ghost"
-                            onClick={async () => {
-                              await window.spoon.ai.saveApiKey(p, key)
-                              setKey('')
-                              await refresh()
-                            }}
-                          >
-                            Save
-                          </button>
-                        </div>
-                      )}
-                      {endpoint && (
-                        <>
-                          {endpoint.needsKey && (
-                            <div className="row-btns">
-                              <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste API key" />
-                              <button
-                                className="ghost"
-                                onClick={async () => {
-                                  await window.spoon.ai.saveApiKey(p, key)
-                                  setKey('')
-                                  await refresh()
-                                }}
-                              >
-                                Save
-                              </button>
-                            </div>
-                          )}
-                          <div className="row-btns">
-                            {endpoint.consoleUrl && (
-                              <button className="ghost" onClick={() => void window.spoon.ai.openConsole(p)}>
-                                Get key
-                              </button>
-                            )}
-                            <button
-                              className="ghost"
-                              onClick={async () => {
-                                await window.spoon.ai.removeEndpoint(p)
-                                await refresh()
-                              }}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-
-          <h3>Add a site</h3>
-          <p className="hint">
-            OpenRouter is the recommended account option (free signup at openrouter.ai). Groq, Gemini, Ollama, and other
-            OpenAI-compatible APIs work too — pick a card and paste a key if it needs one.
-          </p>
-          <div className="ai-grid">
-            {catalogLeft.map((site) => (
-              <div key={site.id} className={`ai-card ${adding === site.id ? 'on' : ''}`}>
+                )
+              })}
+              <div className="rail-kicker">Add</div>
+              {catalogLeft.map((site) => (
                 <button
+                  key={site.id}
                   type="button"
-                  className="ai-card-hit"
+                  className={`rail-item ${aiPick.type === 'add' && aiPick.id === site.id ? 'on' : ''}`}
+                  title={site.label}
                   onClick={() => {
-                    if (!site.needsKey) {
-                      void addSite(site)
-                      return
-                    }
-                    setAdding(adding === site.id ? null : site.id)
                     setAddKey('')
                     setAddModel(site.defaultModel)
+                    setAiPick({ type: 'add', id: site.id })
                   }}
                 >
-                  <span className="ai-mark">
+                  <span className="ai-mark sm">
                     <ProviderIcon id={site.id} label={site.label} />
                   </span>
-                  <span className="ai-card-copy">
-                    <b>{site.label}</b>
+                  <span className="rail-copy">
+                    <span className="rail-label">{site.label}</span>
                     <span className="hint">{site.blurb}</span>
                   </span>
                 </button>
-                {adding === site.id && site.needsKey && (
-                  <div className="ai-card-body">
-                    <label>API key</label>
-                    <input type="password" value={addKey} onChange={(e) => setAddKey(e.target.value)} placeholder="Paste key" />
-                    <label>Model</label>
-                    <input value={addModel} spellCheck={false} onChange={(e) => setAddModel(e.target.value)} placeholder={site.defaultModel} />
-                    <div className="row-btns">
-                      <button className="ghost" onClick={() => void window.spoon.ai.openConsole(site.id)}>
-                        Get key
-                      </button>
-                      <button
-                        className="primary"
-                        disabled={busyId === site.id || !addKey.trim()}
-                        onClick={() => void addSite(site, addKey, addModel)}
-                      >
-                        {busyId === site.id ? 'Adding...' : 'Add'}
-                      </button>
+              ))}
+              <button
+                type="button"
+                className={`rail-item ${aiPick.type === 'custom' ? 'on' : ''}`}
+                title="Custom endpoint"
+                onClick={() => setAiPick({ type: 'custom' })}
+              >
+                <span className="rail-ico" aria-hidden="true">
+                  <IcoCreate />
+                </span>
+                <span className="rail-label">Custom endpoint</span>
+              </button>
+            </nav>
+            <div className="ai-detail">
+              {aiPick.type === 'provider' && (() => {
+                const p = aiPick.id
+                const a = acc.find((x) => x.provider === p)
+                const endpoint = endpoints.find((item) => item.id === p)
+                const st = providerStatus(p)
+                return (
+                  <div className="ai-active">
+                    <div className="ai-active-top">
+                      <span className="ai-mark">
+                        <ProviderIcon id={p} label={providerLabel(p, endpoints)} />
+                      </span>
+                      <div>
+                        <strong>{providerLabel(p, endpoints)}</strong>
+                        <p className={st.connected ? 'pill-on' : 'hint'}>{st.text}</p>
+                      </div>
+                    </div>
+                    <ModelField provider={p} settings={settings} catalog={catalogs[p]} onSaved={onSaved} />
+                    {p === 'free' && (
+                      <p className="hint">
+                        Anonymous Pollinations GPT-OSS. If a request fails, add OpenRouter and create a free account at
+                        openrouter.ai.
+                      </p>
+                    )}
+                    {p !== 'free' && BUILTIN_AI_IDS.includes(p) && (
+                      <div className="row-btns">
+                        {local[p]?.available && (
+                          <div className="ai-local">
+                            <button
+                              className="ghost"
+                              title={local[p].label ? `Use local session (${local[p].label})` : 'Use local session'}
+                              onClick={async () => {
+                                await window.spoon.ai.importLocal(p)
+                                await refresh()
+                              }}
+                            >
+                              Use local session
+                            </button>
+                            {local[p].label && (
+                              <span className="hint ai-mail" title={local[p].label}>
+                                {local[p].label}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {p === 'grok' && (
+                          <button
+                            className="ghost"
+                            onClick={async () => {
+                              try {
+                                await window.spoon.ai.grokPkce()
+                                await refresh()
+                              } catch {
+                                const flow = (await window.spoon.ai.grokDevice()) as { userCode: string; verificationUrl: string }
+                                setDevice({ userCode: flow.userCode, url: flow.verificationUrl })
+                                await window.spoon.ai.grokPoll(flow)
+                                setDevice(null)
+                                await refresh()
+                              }
+                            }}
+                          >
+                            Sign in with Grok
+                          </button>
+                        )}
+                        <button className="ghost" onClick={() => void window.spoon.ai.openConsole(p)}>
+                          Get key
+                        </button>
+                        {a?.connected && (
+                          <button
+                            className="ghost"
+                            onClick={async () => {
+                              await window.spoon.ai.disconnect(p)
+                              await refresh()
+                            }}
+                          >
+                            Disconnect
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {PAID_AI_PROVIDERS.includes(p) && (
+                      <div className="row-btns">
+                        <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste API key" />
+                        <button
+                          className="ghost"
+                          onClick={async () => {
+                            await window.spoon.ai.saveApiKey(p, key)
+                            setKey('')
+                            await refresh()
+                          }}
+                        >
+                          Save
+                        </button>
+                      </div>
+                    )}
+                    {endpoint && (
+                      <>
+                        {endpoint.needsKey && (
+                          <div className="row-btns">
+                            <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste API key" />
+                            <button
+                              className="ghost"
+                              onClick={async () => {
+                                await window.spoon.ai.saveApiKey(p, key)
+                                setKey('')
+                                await refresh()
+                              }}
+                            >
+                              Save
+                            </button>
+                          </div>
+                        )}
+                        <div className="row-btns">
+                          {endpoint.consoleUrl && (
+                            <button className="ghost" onClick={() => void window.spoon.ai.openConsole(p)}>
+                              Get key
+                            </button>
+                          )}
+                          <button
+                            className="ghost"
+                            onClick={async () => {
+                              await window.spoon.ai.removeEndpoint(p)
+                              setAiPick({ type: 'provider', id: 'free' })
+                              await refresh()
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )
+              })()}
+              {aiPick.type === 'add' && siteAdding && (
+                <div className="ai-active">
+                  <div className="ai-active-top">
+                    <span className="ai-mark">
+                      <ProviderIcon id={siteAdding.id} label={siteAdding.label} />
+                    </span>
+                    <div>
+                      <strong>{siteAdding.label}</strong>
+                      <p className="hint">{siteAdding.blurb}</p>
                     </div>
                   </div>
-                )}
-              </div>
-            ))}
+                  {siteAdding.needsKey && (
+                    <>
+                      <label>API key</label>
+                      <input type="password" value={addKey} onChange={(e) => setAddKey(e.target.value)} placeholder="Paste key" />
+                      <label>Model</label>
+                      <input value={addModel} spellCheck={false} onChange={(e) => setAddModel(e.target.value)} placeholder={siteAdding.defaultModel} />
+                    </>
+                  )}
+                  <div className="row-btns">
+                    {siteAdding.consoleUrl && (
+                      <button className="ghost" onClick={() => void window.spoon.ai.openConsole(siteAdding.id)}>
+                        Get key
+                      </button>
+                    )}
+                    <button
+                      className="primary"
+                      disabled={busyId === siteAdding.id || (siteAdding.needsKey && !addKey.trim())}
+                      onClick={() => void addSite(siteAdding, addKey, addModel)}
+                    >
+                      {busyId === siteAdding.id ? 'Adding...' : 'Add'}
+                    </button>
+                  </div>
+                </div>
+              )}
+              {aiPick.type === 'custom' && (
+                <div className="ai-active">
+                  <h3>Custom endpoint</h3>
+                  <p className="hint">Any OpenAI-compatible base URL — LiteLLM, vLLM, a proxy, or a provider that is not listed.</p>
+                  <div className="custom-grid">
+                    <label>
+                      Name
+                      <input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="OpenRouter work" />
+                    </label>
+                    <label>
+                      Base URL
+                      <input value={customUrl} spellCheck={false} onChange={(e) => setCustomUrl(e.target.value)} placeholder="https://openrouter.ai/api/v1" />
+                    </label>
+                    <label>
+                      API key
+                      <input type="password" value={customKey} onChange={(e) => setCustomKey(e.target.value)} placeholder="Optional for local servers" />
+                    </label>
+                    <label>
+                      Model
+                      <input value={customModel} spellCheck={false} onChange={(e) => setCustomModel(e.target.value)} placeholder="gpt-4o-mini" />
+                    </label>
+                  </div>
+                  <div className="row-btns" style={{ marginTop: 10 }}>
+                    <button className="primary" disabled={!customUrl.trim() || !!busyId} onClick={() => void addCustom()}>
+                      Add custom API
+                    </button>
+                  </div>
+                </div>
+              )}
+              {device && (
+                <p className="hint">
+                  Enter code <b>{device.userCode}</b> at {device.url}
+                </p>
+              )}
+            </div>
           </div>
-
-          <h3>Custom endpoint</h3>
-          <p className="hint">Any OpenAI-compatible base URL  -  LiteLLM, vLLM, a proxy, or a provider that is not listed above.</p>
-          <div className="custom-grid">
-            <label>
-              Name
-              <input value={customName} onChange={(e) => setCustomName(e.target.value)} placeholder="OpenRouter work" />
-            </label>
-            <label>
-              Base URL
-              <input value={customUrl} spellCheck={false} onChange={(e) => setCustomUrl(e.target.value)} placeholder="https://openrouter.ai/api/v1" />
-            </label>
-            <label>
-              API key
-              <input type="password" value={customKey} onChange={(e) => setCustomKey(e.target.value)} placeholder="Optional for local servers" />
-            </label>
-            <label>
-              Model
-              <input value={customModel} spellCheck={false} onChange={(e) => setCustomModel(e.target.value)} placeholder="gpt-4o-mini" />
-            </label>
-          </div>
-          <div className="row-btns" style={{ marginTop: 10 }}>
-            <button className="primary" disabled={!customUrl.trim() || !!busyId} onClick={() => void addCustom()}>
-              Add custom API
-            </button>
-          </div>
-
-          {device && (
-            <p className="hint">
-              Enter code <b>{device.userCode}</b> at {device.url}
-            </p>
-          )}
         </section>
       )}
 
-      <div className="dialog-foot">
-        <button className="primary" onClick={onClose}>
-          Done
-        </button>
+      {tab === 'help' && (
+        <section className="prefs-pane" role="tabpanel" id="prefs-panel-help" aria-labelledby="prefs-tab-help">
+          <h3>Spoon{version ? ` ${version}` : ''}</h3>
+          <p>Spoon is a Git client for Windows. Scan or clone repositories from Home, then fetch, pull, and commit from the toolbar.</p>
+          <p>AI message only fills the commit box. AI commit stays local unless you push yourself.</p>
+          <h3>Guides</h3>
+          <div className="row-btns" style={{ marginTop: 4 }}>
+            <button
+              className="ghost"
+              onClick={() => {
+                onClose()
+                window.setTimeout(() => document.dispatchEvent(new CustomEvent('spoon-tour')), 50)
+              }}
+            >
+              Take the tour
+            </button>
+            <button
+              className="ghost"
+              onClick={() => {
+                void window.spoon.app.checkUpdate()
+                onClose()
+              }}
+            >
+              Check for updates
+            </button>
+            <button className="ghost" onClick={() => void window.spoon.app.openExternal('https://github.com/elgodox/spoon')}>
+              GitHub
+            </button>
+            <button className="ghost" onClick={() => void window.spoon.app.openExternal('https://github.com/elgodox/spoon/issues')}>
+              Report an issue
+            </button>
+          </div>
+        </section>
+      )}
+
+            </div>
+            <div className="dialog-foot">
+              <button className="primary" onClick={onClose}>
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
-    </Modal>
+    </div>
   )
 }
 
@@ -3279,7 +3420,7 @@ function QuickLaunch({
     ...recent.map((r) => ({ id: r.path, label: `Open ${r.name}`, run: () => onOpen(r.path, r.name) })),
     { id: 'fetch', label: 'Fetch', run: () => onAction('fetch') },
     { id: 'branch', label: 'New branch', run: () => onAction('branch') },
-    { id: 'settings', label: 'Preferences / AI', run: () => onAction('settings') }
+    { id: 'settings', label: 'Preferences', run: () => onAction('settings') }
   ].filter((i) => i.label.toLowerCase().includes(q.toLowerCase()))
   const [idx, setIdx] = useState(0)
   return (

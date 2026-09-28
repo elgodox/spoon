@@ -32,21 +32,9 @@ const STEPS: TourStep[] = [
     target: '[data-tour="tabs"]'
   },
   {
-    id: 'ai',
-    title: 'AI writes the message',
-    body: 'Free AI writes a message with no account. If that route is down, add OpenRouter in Preferences (openrouter.ai). AI message only fills the box. AI commit stays local — push is always a separate action.',
-    target: '[data-tour="ai"]'
-  },
-  {
-    id: 'help',
-    title: 'Help is on the toolbar',
-    body: 'Open Help for the tour, updates, and the GitHub page. The same items live under the Help menu.',
-    target: '[data-tour="help"]'
-  },
-  {
-    id: 'look',
-    title: 'Glass and theme',
-    body: 'Preferences control mica/acrylic, frosted glass intensity, and light/dark. Turn glass down if a panel looks too see-through.',
+    id: 'settings',
+    title: 'Settings is one menu',
+    body: 'Appearance, Git, AI, and Help live in Settings. The left menu switches sections and can collapse. Theme is light or dark.',
     target: '[data-tour="prefs"]'
   }
 ]
