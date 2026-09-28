@@ -1,4 +1,5 @@
-﻿import { memo, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+﻿import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type {
   ActivityItem,
   AiAccount,
@@ -13,6 +14,7 @@ import type {
   ConflictFile,
   DiffHunk,
   FileDiff,
+  MediaKind,
   MediaPair,
   MediaSide,
   FileTreeNode,
@@ -33,10 +35,12 @@ import {
   IcoAi,
   IcoBranch,
   IcoChanges,
+  IcoCheck,
   IcoChevron,
   IcoClose,
   IcoConsole,
   IcoCreate,
+  IcoDeep,
   IcoFetch,
   IcoHealth,
   IcoHelp,
@@ -53,6 +57,7 @@ import {
   IcoTag,
   IcoTheme
 } from './icons'
+import { AboutDialog } from './About'
 import { Tour } from './Tour'
 import { HealthDialog, RepoHome } from './RepoHome'
 import {
@@ -131,6 +136,7 @@ type Overlay =
   | { type: 'merge'; ref: string }
   | { type: 'rebase'; ref: string }
   | { type: 'settings'; tab?: PrefsTab }
+  | { type: 'about' }
   | { type: 'health' }
   | { type: 'blame'; file: string; rev?: string }
   | { type: 'history'; file: string }
@@ -311,7 +317,7 @@ export function App() {
         if (a === 'settings') setOverlay({ type: 'settings' })
         if (a === 'quick') setQuick(true)
         if (a === 'theme') void toggleTheme()
-        if (a === 'about') setOverlay({ type: 'settings', tab: 'help' })
+        if (a === 'about') setOverlay({ type: 'about' })
         if (a === 'tour') setTour(true)
         if (a === 'health') setOverlay({ type: 'health' })
         if (a === 'check-updates') void window.spoon.app.checkUpdate().then((s) => setUpdate(s as UpdateState))
@@ -446,7 +452,7 @@ export function App() {
     >
       <div className="toolbar">
         <div className="tb-group" data-tour="sync">
-          <button className="tb-btn brand" title="Spoon" onClick={goHome}>
+          <button className="tb-btn brand" title="About Spoon" aria-label="About Spoon" onClick={() => setOverlay({ type: 'about' })}>
             <IcoSpoon />
             <span>Spoon</span>
           </button>
@@ -616,6 +622,7 @@ export function App() {
           onClose={() => setOverlay(null)}
           onReload={() => void reload()}
           onOpen={loadRepo}
+          onHelp={() => setOverlay({ type: 'settings', tab: 'help' })}
           onSettings={async () => {
             await refreshSettings()
           }}
@@ -753,6 +760,154 @@ function ConfettiBurst({ token }: { token: number }) {
           }}
         />
       ))}
+    </div>
+  )
+}
+
+function ModelMenu({
+  value,
+  choices,
+  onChange
+}: {
+  value: string
+  choices: AiModelChoice[]
+  onChange: (id: string) => void
+}) {
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const listId = useId()
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const [hi, setHi] = useState(value)
+  const [pos, setPos] = useState({ bottom: 0, left: 0, width: 280 })
+  const current = choices.find((item) => item.id === value) ?? { id: value, label: value }
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    if (!needle) return choices
+    return choices.filter((item) => item.label.toLowerCase().includes(needle) || item.id.toLowerCase().includes(needle))
+  }, [choices, q])
+
+  useLayoutEffect(() => {
+    if (!open || !btnRef.current) return
+    const r = btnRef.current.getBoundingClientRect()
+    setPos({
+      bottom: Math.max(8, window.innerHeight - r.top + 6),
+      left: Math.min(r.left, window.innerWidth - Math.max(r.width, 260) - 8),
+      width: Math.max(r.width, 260)
+    })
+  }, [open, filtered.length])
+
+  useEffect(() => {
+    if (!open) return
+    setHi(value)
+    setQ('')
+    const onDoc = (e: PointerEvent) => {
+      const t = e.target as Node
+      if (btnRef.current?.contains(t) || listRef.current?.contains(t)) return
+      setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        setOpen(false)
+        btnRef.current?.focus()
+      }
+    }
+    document.addEventListener('pointerdown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDoc)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open, value])
+
+  const move = (dir: 1 | -1) => {
+    if (!filtered.length) return
+    const i = Math.max(0, filtered.findIndex((item) => item.id === hi))
+    setHi(filtered[(i + dir + filtered.length) % filtered.length].id)
+  }
+
+  const pick = (id: string) => {
+    onChange(id)
+    setOpen(false)
+    btnRef.current?.focus()
+  }
+
+  return (
+    <div className={`menu-select model-menu${open ? ' open' : ''}`}>
+      <button
+        ref={btnRef}
+        type="button"
+        className="menu-select-btn model-select"
+        title="AI model"
+        aria-label="AI model"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault()
+            if (!open) setOpen(true)
+            else move(e.key === 'ArrowDown' ? 1 : -1)
+          }
+          if (open && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault()
+            pick(hi)
+          }
+        }}
+      >
+        <span>{current.label}</span>
+        <IcoChevron />
+      </button>
+      {open &&
+        createPortal(
+          <div
+            ref={listRef}
+            id={listId}
+            className="menu-select-list model-menu-list"
+            style={{ position: 'fixed', bottom: pos.bottom, left: pos.left, width: pos.width }}
+          >
+            {choices.length > 8 && (
+              <input
+                className="model-filter"
+                value={q}
+                placeholder="Filter models"
+                aria-label="Filter models"
+                autoFocus
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    move(e.key === 'ArrowDown' ? 1 : -1)
+                  }
+                  if (e.key === 'Enter' && filtered[0]) {
+                    e.preventDefault()
+                    pick(hi && filtered.some((item) => item.id === hi) ? hi : filtered[0].id)
+                  }
+                }}
+              />
+            )}
+            <ul role="listbox" aria-label="AI models">
+              {filtered.map((item) => (
+                <li key={item.id} role="presentation">
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={item.id === value}
+                    className={`menu-select-opt${item.id === value ? ' on' : ''}${item.id === hi ? ' hi' : ''}`}
+                    onMouseEnter={() => setHi(item.id)}
+                    onClick={() => pick(item.id)}
+                  >
+                    {item.label}
+                  </button>
+                </li>
+              ))}
+              {!filtered.length && <li className="menu-select-empty">No models match</li>}
+            </ul>
+          </div>,
+          document.body
+        )}
     </div>
   )
 }
@@ -1517,10 +1672,11 @@ function Workspace({
                   )
                 }}
               />
-              <div className="commit-box" style={{ height: commitH }}>
+              <div className="commit-box">
                 <textarea
                   placeholder="Commit message"
                   value={msg}
+                  style={{ height: Math.max(64, commitH - 52) }}
                   onChange={(e) => setMsg(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.preventDefault()
@@ -1531,37 +1687,35 @@ function Workspace({
                     <input type="checkbox" checked={amend} onChange={(e) => setAmend(e.target.checked)} /> Amend
                   </label>
                   <span className="hint">{msg.split('\n')[0]?.length || 0}/72</span>
-                  <select
-                    className="model-select"
+                  <ModelMenu
                     value={model}
-                    title="AI model"
-                    onChange={(e) =>
+                    choices={modelChoices}
+                    onChange={(id) =>
                       onPatchSettings({
-                        aiModels: { ...(settings?.aiModels ?? DEFAULT_AI_MODELS), [provider]: e.target.value }
+                        aiModels: { ...(settings?.aiModels ?? DEFAULT_AI_MODELS), [provider]: id }
                       })
                     }
-                  >
-                    {modelChoices.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <div className="commit-actions">
-                    <button className="ghost" disabled={aiBusy} onClick={() => void aiFill('fill')}>
-                      {aiBusy ? 'Writing...' : 'AI message'}
+                    <button className="ghost ico-text" disabled={aiBusy} onClick={() => void aiFill('fill')}>
+                      <IcoAi />
+                      <span>{aiBusy ? 'Writing...' : 'AI message'}</span>
                     </button>
-                    <button className="ghost" disabled={planBusy} onClick={() => void runAnalysis()}>
-                      {planBusy ? 'Analyzing...' : 'Analyze'}
+                    <button className="ghost ico-text" disabled={planBusy} onClick={() => void runAnalysis()}>
+                      <IcoDeep />
+                      <span>{planBusy ? 'Analyzing...' : 'Analyze'}</span>
                     </button>
-                    <button className="primary" disabled={!snap.status.stagedCount && !amend} onClick={() => void doCommit(false)}>
-                      Commit {snap.status.stagedCount}
+                    <button className="primary ico-text" disabled={!snap.status.stagedCount && !amend} onClick={() => void doCommit(false)}>
+                      <IcoCheck />
+                      <span>Commit {snap.status.stagedCount}</span>
                     </button>
-                    <button className="primary ai" disabled={aiBusy} onClick={() => void aiFill('commit')}>
-                      AI commit
+                    <button className="primary ai ico-text" disabled={aiBusy} onClick={() => void aiFill('commit')}>
+                      <IcoSpoon />
+                      <span>AI commit</span>
                     </button>
-                    <button className="ghost" onClick={() => void doCommit(true)}>
-                      Commit & push
+                    <button className="ghost ico-text" onClick={() => void doCommit(true)}>
+                      <IcoPush />
+                      <span>Commit & push</span>
                     </button>
                   </div>
                 </div>
@@ -1791,6 +1945,76 @@ function StashView({
   )
 }
 
+function SplitHunks({ diff }: { diff: FileDiff }) {
+  return (
+    <div className="split">
+      <div className="side">
+        {diff.hunks.flatMap((h) =>
+          h.lines
+            .filter((l) => l.type !== 'add')
+            .map((l, i) => (
+              <div key={`l${i}`} className={`diff-line ${l.type}`}>
+                <span className="n">{l.oldNo ?? ''}</span>
+                <span className="n" />
+                <span className="tx">{l.text}</span>
+              </div>
+            ))
+        )}
+      </div>
+      <div className="side">
+        {diff.hunks.flatMap((h) =>
+          h.lines
+            .filter((l) => l.type !== 'del')
+            .map((l, i) => (
+              <div key={`r${i}`} className={`diff-line ${l.type}`}>
+                <span className="n" />
+                <span className="n">{l.newNo ?? ''}</span>
+                <span className="tx">{l.text}</span>
+              </div>
+            ))
+        )}
+      </div>
+    </div>
+  )
+}
+
+function UnifiedHunks({
+  diff,
+  onHunk
+}: {
+  diff: FileDiff
+  onHunk?: (h: DiffHunk, mode: 'stage' | 'unstage' | 'discard') => void
+}) {
+  return (
+    <>
+      {diff.hunks.map((h, hi) => (
+        <div key={hi}>
+          {onHunk && (
+            <div className="hunk-actions">
+              <button className="ghost" onClick={() => onHunk(h, 'stage')}>
+                Stage
+              </button>
+              <button className="ghost" onClick={() => onHunk(h, 'unstage')}>
+                Unstage
+              </button>
+              <button className="ghost" onClick={() => onHunk(h, 'discard')}>
+                Discard
+              </button>
+            </div>
+          )}
+          {h.lines.map((l, i) => (
+            <div key={i} className={`diff-line ${l.type}`}>
+              <span className="n">{l.oldNo ?? ''}</span>
+              <span className="n">{l.newNo ?? ''}</span>
+              <span className="tx">{l.text}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </>
+  )
+}
+
 function DiffView({
   repo,
   rev,
@@ -1809,68 +2033,23 @@ function DiffView({
     <div className="diff-view">
       {diffs.map((d) => {
         const media = classifyMedia(d.path)
+        const showText = !d.binary && d.hunks.length > 0
         return (
-        <div key={d.path}>
+        <div key={d.path} className="diff-file">
           <div className="diff-tools">{d.path}</div>
           {media && repo ? (
-            <MediaCompare repo={repo} file={d.path} origPath={d.origPath} rev={rev} />
+            <MediaCompare repo={repo} file={d.path} origPath={d.origPath} rev={rev} kind={media.kind} mime={media.mime} />
           ) : d.binary ? (
             <div className="empty">Binary file. Spoon previews images, video, audio, and PDF.</div>
-          ) : split ? (
-            <div className="split">
-              <div className="side">
-                {d.hunks.flatMap((h) =>
-                  h.lines
-                    .filter((l) => l.type !== 'add')
-                    .map((l, i) => (
-                      <div key={`l${i}`} className={`diff-line ${l.type}`}>
-                        <span className="n">{l.oldNo ?? ''}</span>
-                        <span className="n" />
-                        <span className="tx">{l.text}</span>
-                      </div>
-                    ))
-                )}
-              </div>
-              <div className="side">
-                {d.hunks.flatMap((h) =>
-                  h.lines
-                    .filter((l) => l.type !== 'del')
-                    .map((l, i) => (
-                      <div key={`r${i}`} className={`diff-line ${l.type}`}>
-                        <span className="n" />
-                        <span className="n">{l.newNo ?? ''}</span>
-                        <span className="tx">{l.text}</span>
-                      </div>
-                    ))
-                )}
-              </div>
-            </div>
-          ) : (
-            d.hunks.map((h, hi) => (
-              <div key={hi}>
-                {onHunk && (
-                  <div style={{ display: 'flex', gap: 6, padding: '4px 8px' }}>
-                    <button className="ghost" onClick={() => onHunk(h, 'stage')}>
-                      Stage
-                    </button>
-                    <button className="ghost" onClick={() => onHunk(h, 'unstage')}>
-                      Unstage
-                    </button>
-                    <button className="ghost" onClick={() => onHunk(h, 'discard')}>
-                      Discard
-                    </button>
-                  </div>
-                )}
-                {h.lines.map((l, i) => (
-                  <div key={i} className={`diff-line ${l.type}`}>
-                    <span className="n">{l.oldNo ?? ''}</span>
-                    <span className="n">{l.newNo ?? ''}</span>
-                    <span className="tx">{l.text}</span>
-                  </div>
-                ))}
-              </div>
-            ))
-          )}
+          ) : null}
+          {media && showText ? (
+            <details className="media-code">
+              <summary>Text diff</summary>
+              {split ? <SplitHunks diff={d} /> : <UnifiedHunks diff={d} onHunk={onHunk} />}
+            </details>
+          ) : !media && !d.binary ? (
+            split ? <SplitHunks diff={d} /> : <UnifiedHunks diff={d} onHunk={onHunk} />
+          ) : null}
         </div>
         )
       })}
@@ -1882,12 +2061,16 @@ function MediaCompare({
   repo,
   file,
   origPath,
-  rev
+  rev,
+  kind,
+  mime
 }: {
   repo: string
   file: string
   origPath?: string
   rev?: string
+  kind: MediaKind
+  mime: string
 }) {
   const [pair, setPair] = useState<MediaPair | null>(null)
   const [err, setErr] = useState('')
@@ -1910,44 +2093,106 @@ function MediaCompare({
   if (err) return <div className="empty">{err}</div>
   if (!pair) return <div className="empty">Loading preview...</div>
   return (
-    <div className="media-preview">
-      <MediaPane repo={repo} file={origPath || file} title={rev ? 'Parent' : 'HEAD'} side={pair.before} />
-      <MediaPane repo={repo} file={file} title={rev ? 'This commit' : 'Working copy'} side={pair.after} />
+    <div className={`media-preview${kind === 'image' ? ' images' : ''}`}>
+      <MediaPane repo={repo} file={origPath || file} title={rev ? 'Parent' : 'HEAD'} side={pair.before} fallback={{ kind, mime }} />
+      <MediaPane repo={repo} file={file} title={rev ? 'This commit' : 'Working copy'} side={pair.after} fallback={{ kind, mime }} />
     </div>
   )
 }
 
-function MediaPane({ repo, file, title, side }: { repo: string; file: string; title: string; side: MediaSide }) {
+function useObjectUrl(base64?: string, mime?: string) {
+  const [url, setUrl] = useState('')
+  useEffect(() => {
+    if (!base64 || !mime) {
+      setUrl('')
+      return
+    }
+    let objectUrl = ''
+    try {
+      const bin = atob(base64)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+      const type = mime === 'image/svg+xml' ? 'image/svg+xml;charset=utf-8' : mime
+      objectUrl = URL.createObjectURL(new Blob([bytes], { type }))
+      setUrl(objectUrl)
+    } catch {
+      setUrl(`data:${mime};base64,${base64}`)
+    }
+    return () => {
+      if (objectUrl.startsWith('blob:')) URL.revokeObjectURL(objectUrl)
+    }
+  }, [base64, mime])
+  return url
+}
+
+function MediaPane({
+  repo,
+  file,
+  title,
+  side,
+  fallback
+}: {
+  repo: string
+  file: string
+  title: string
+  side: MediaSide
+  fallback: { kind: MediaKind; mime: string }
+}) {
   const [failed, setFailed] = useState(false)
-  const src = side.base64 ? `data:${side.mime};base64,${side.base64}` : ''
+  const [size, setSize] = useState('')
+  const kind = side.kind === 'binary' ? fallback.kind : side.kind
+  const mime = side.mime === 'application/octet-stream' ? fallback.mime : side.mime
+  const src = useObjectUrl(side.base64, mime)
+  const svg = mime.includes('svg')
+  useEffect(() => {
+    setFailed(false)
+    setSize('')
+  }, [src])
   return (
     <div className="media-pane">
       <div className="kv">
         {title}
-        {side.bytes ? ` - ${formatBytes(side.bytes)}` : ''}
+        {side.bytes ? ` · ${formatBytes(side.bytes)}` : ''}
+        {size ? ` · ${size}` : ''}
       </div>
       {side.missing ? (
-        <div className="empty">Not in this version</div>
+        <div className="media-frame empty-frame">Not in this version</div>
       ) : side.tooLarge || !src ? (
-        <div className="empty">
+        <div className="media-frame empty-frame">
           This file is too large to preview inline.
           <button className="ghost" onClick={() => void window.spoon.git.openFile(repo, file)}>
             Open
           </button>
         </div>
-      ) : side.kind === 'image' ? (
-        <img src={src} alt={title} />
-      ) : side.kind === 'video' ? (
-        <>
+      ) : failed ? (
+        <div className="media-frame empty-frame">
+          Could not render this {svg ? 'SVG' : kind}.
+          <button className="ghost" onClick={() => void window.spoon.git.openFile(repo, file)}>
+            Open
+          </button>
+        </div>
+      ) : kind === 'image' ? (
+        <div className="media-frame">
+          <img
+            src={src}
+            alt={title}
+            onError={() => setFailed(true)}
+            onLoad={(e) => {
+              const el = e.currentTarget
+              if (el.naturalWidth) setSize(`${el.naturalWidth}×${el.naturalHeight}`)
+            }}
+          />
+        </div>
+      ) : kind === 'video' ? (
+        <div className="media-frame">
           <video src={src} controls onError={() => setFailed(true)} />
-          {failed && <div className="hint">This video codec does not play inside Spoon. Open it externally.</div>}
-        </>
-      ) : side.kind === 'audio' ? (
+        </div>
+      ) : kind === 'audio' ? (
         <audio src={src} controls onError={() => setFailed(true)} />
-      ) : side.kind === 'pdf' ? (
+      ) : kind === 'pdf' ? (
         <iframe title={title} src={src} />
       ) : (
-        <div className="empty">No preview for this file type.</div>
+        <div className="media-frame empty-frame">No preview for this file type.</div>
       )}
       {!side.missing && !side.tooLarge && (
         <button className="ghost" onClick={() => void window.spoon.git.openFile(repo, file)}>
@@ -2200,6 +2445,7 @@ function DialogHost({
   onClose,
   onReload,
   onOpen,
+  onHelp,
   onSettings
 }: {
   overlay: Overlay
@@ -2211,9 +2457,11 @@ function DialogHost({
   onClose: () => void
   onReload: () => void
   onOpen: (p: string, n?: string) => void
+  onHelp: () => void
   onSettings: () => Promise<void>
 }) {
   if (!overlay) return null
+  if (overlay.type === 'about') return <AboutDialog onClose={onClose} onHelp={onHelp} />
   if (overlay.type === 'settings')
     return (
       <SettingsDialog

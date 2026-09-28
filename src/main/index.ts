@@ -457,6 +457,12 @@ function registerIpc(): void {
   })
   ipcMain.handle('app:chrome', () => chromeInfo())
   ipcMain.handle('app:version', () => app.getVersion())
+  ipcMain.handle('app:about', () => ({
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node
+  }))
   ipcMain.handle('app:openIn', (_e, path: string, target: 'editor' | 'terminal' | 'explorer') => openIn(path, target))
   ipcMain.handle('app:update', () => updater.current())
   ipcMain.handle('app:checkUpdate', () => updater.check())

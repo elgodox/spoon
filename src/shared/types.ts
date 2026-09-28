@@ -389,6 +389,13 @@ export interface UpdateState {
   error?: string
 }
 
+export interface AboutInfo {
+  version: string
+  electron: string
+  chrome: string
+  node: string
+}
+
 export interface ChangeBriefFile {
   path: string
   status: string

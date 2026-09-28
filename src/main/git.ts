@@ -39,15 +39,20 @@ const IMAGE_EXT = new Set([
   '.png',
   '.jpg',
   '.jpeg',
+  '.jfif',
   '.gif',
   '.webp',
   '.bmp',
   '.ico',
   '.svg',
+  '.svgz',
+  '.avif',
+  '.apng',
   '.tif',
   '.tiff',
   '.tga',
-  '.heic'
+  '.heic',
+  '.heif'
 ])
 
 export interface GitResult {

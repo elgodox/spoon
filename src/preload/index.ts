@@ -119,6 +119,7 @@ const api = {
     popup: (items: object[]) => ipcRenderer.invoke('app:popup', items),
     chrome: () => ipcRenderer.invoke('app:chrome'),
     version: () => ipcRenderer.invoke('app:version'),
+    about: () => ipcRenderer.invoke('app:about'),
     openIn: (path: string, target: 'editor' | 'terminal' | 'explorer') => ipcRenderer.invoke('app:openIn', path, target),
     update: () => ipcRenderer.invoke('app:update'),
     checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),

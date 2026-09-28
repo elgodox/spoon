@@ -130,6 +130,11 @@ export const IcoClose = () => (
     <path d="M6.5 6.5l11 11M17.5 6.5l-11 11" />
   </S>
 )
+export const IcoCheck = () => (
+  <S>
+    <path d="M5 12.5l4.2 4.2L19 7.5" strokeWidth="2" />
+  </S>
+)
 export const IcoChevron = () => (
   <S>
     <path d="M14.5 6l-6 6 6 6" />
