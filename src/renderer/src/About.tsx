@@ -3,6 +3,11 @@ import type { AboutInfo, UpdateState } from '../../shared/types'
 import { IcoClose, IcoHelp, IcoRefresh } from './icons'
 
 const NOTES: Record<string, string[]> = {
+  '1.2.1': [
+    'About Spoon from the toolbar mark, with version notes and updates.',
+    'Commit bar stays at the bottom, with icons and a rounded model menu.',
+    'Clearer image and SVG diffs, including side-by-side previews.'
+  ],
   '1.2.0': [
     'Health checks, bulk fetch/pull/push, and folder scan.',
     'Automatic updates from GitHub Releases.',
