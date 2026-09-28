@@ -1,6 +1,28 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import type { BulkResult, RepoHealth, RepoIssue, RepoOverview, RepoSort, RepoSummary, Settings } from '../../shared/types'
+import {
+  IcoAddRepo,
+  IcoClone,
+  IcoCode,
+  IcoConsole,
+  IcoCreate,
+  IcoDeep,
+  IcoFetch,
+  IcoHome,
+  IcoOpen,
+  IcoPin,
+  IcoPull,
+  IcoPush,
+  IcoRefresh,
+  IcoScan,
+  IcoShield,
+  IcoTrash,
+  IcoUnpin,
+  IcoWrench
+} from './icons'
 import { bindDrag, clamp, catchErr, formatAgo } from './lib'
+
+type StatusFilter = 'all' | 'dirty' | 'behind' | 'ahead' | 'blocked'
 
 type Props = {
   recent: RepoSummary[]
@@ -39,22 +61,24 @@ export function RepoHome({
   const [bulk, setBulk] = useState<BulkResult[] | null>(null)
   const [picked, setPicked] = useState<string[]>([])
   const [anchor, setAnchor] = useState<string | null>(null)
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const pinned = settings?.pinned ?? []
   const sort = settings?.repoSort ?? 'opened'
   const overviewGen = useRef(0)
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase()
-    const list = query
-      ? recent.filter((r) => r.name.toLowerCase().includes(query) || r.path.toLowerCase().includes(query))
-      : recent
+    const list = recent.filter((r) => {
+      if (query && !r.name.toLowerCase().includes(query) && !r.path.toLowerCase().includes(query)) return false
+      return matchesStatus(overviews[r.path], statusFilter)
+    })
     return [...list].sort((a, b) => {
       const ap = pinned.includes(a.path) ? 0 : 1
       const bp = pinned.includes(b.path) ? 0 : 1
       if (ap !== bp) return ap - bp
       return compareRepos(a, b, sort, overviews)
     })
-  }, [recent, q, pinned, overviews, sort])
+  }, [recent, q, pinned, overviews, sort, statusFilter])
 
   const current = recent.find((r) => r.path === sel)
   const overview = sel ? overviews[sel] : undefined
@@ -242,6 +266,11 @@ export function RepoHome({
     setAnchor(path)
   }
 
+  function toggleFilter(id: StatusFilter) {
+    setStatusFilter((prev) => (id === 'all' || prev === id ? 'all' : id))
+    setPicked([])
+  }
+
   const counts = useMemo(() => summarize(overviews, recent), [overviews, recent])
   const actionCount = picked.length || filtered.length
   const actionHint = picked.length ? `${picked.length} selected` : `all ${filtered.length}`
@@ -366,7 +395,9 @@ export function RepoHome({
             </div>
           )
         })}
-        {!filtered.length && <div className="empty">{recent.length ? 'No matches.' : 'No repositories yet'}</div>}
+        {!filtered.length && (
+          <div className="empty">{recent.length ? emptyFilterLabel(statusFilter, !!q.trim()) : 'No repositories yet'}</div>
+        )}
       </div>
       <div
         className="splitbar x"
@@ -386,59 +417,128 @@ export function RepoHome({
           </div>
           <div>
             <h1>Repository Manager</h1>
-            <p className="hero-sub">Scan, refresh, repair, and open every Git repo on this machine.</p>
+            <p className="hero-sub">Add repositories, then refresh or sync them in bulk.</p>
           </div>
         </div>
 
-        <div className="stat-row">
-          <span>
-            <b>{counts.total}</b> repos
-          </span>
-          <span>
-            <b>{counts.dirty}</b> dirty
-          </span>
-          <span>
-            <b>{counts.behind}</b> behind
-          </span>
-          <span>
-            <b>{counts.ahead}</b> to push
-          </span>
-          <span>
-            <b>{counts.broken}</b> blocked
-          </span>
+        <div className="stat-row" role="toolbar" aria-label="Filter repositories by status">
+          <StatChip
+            id="all"
+            count={counts.total}
+            label="repos"
+            hint="Show all repositories"
+            active={statusFilter === 'all'}
+            onClick={toggleFilter}
+          />
+          <StatChip
+            id="dirty"
+            count={counts.dirty}
+            label="dirty"
+            tone="warn"
+            hint="Show repositories with uncommitted changes"
+            active={statusFilter === 'dirty'}
+            onClick={toggleFilter}
+          />
+          <StatChip
+            id="behind"
+            count={counts.behind}
+            label="behind"
+            tone="info"
+            hint="Show repositories behind their remote"
+            active={statusFilter === 'behind'}
+            onClick={toggleFilter}
+          />
+          <StatChip
+            id="ahead"
+            count={counts.ahead}
+            label="to push"
+            tone="info"
+            hint="Show repositories with commits to push"
+            active={statusFilter === 'ahead'}
+            onClick={toggleFilter}
+          />
+          <StatChip
+            id="blocked"
+            count={counts.broken}
+            label="blocked"
+            tone="err"
+            hint="Show repositories that need attention"
+            active={statusFilter === 'blocked'}
+            onClick={toggleFilter}
+          />
         </div>
 
-        <div className="mgr-actions">
-          <button className="primary" onClick={onClone}>
-            Clone
-          </button>
-          <button className="ghost" onClick={onAdd}>
-            Add existing
-          </button>
-          <button className="ghost" onClick={onInit}>
-            Create new
-          </button>
-          <button className="ghost" onClick={() => void scanFolders()}>
-            Scan folders
-          </button>
-          <button className="ghost" disabled={!settings?.watchedRoots?.length || !!busy} onClick={() => void rescan()}>
-            Rescan
-          </button>
-          <button className="ghost" disabled={!!busy || !actionCount} onClick={() => void runBulk('refresh')}>
-            {busy === 'refresh' ? 'Refreshing...' : `Refresh ${actionHint}`}
-          </button>
-          <button className="ghost" disabled={!!busy || !actionCount} onClick={() => void runBulk('fetch')}>
-            {busy === 'fetch' ? 'Fetching...' : `Fetch ${actionHint}`}
-          </button>
-          <button className="ghost" disabled={!!busy || !actionCount} onClick={() => void runBulk('pull')}>
-            {busy === 'pull' ? 'Pulling...' : `Pull ${actionHint}`}
-          </button>
-          <button className="ghost" disabled={!!busy || !actionCount} onClick={() => void runBulk('push')}>
-            {busy === 'push' ? 'Pushing...' : `Push ${actionHint}`}
-          </button>
+        <div className="mgr-tools">
+          <div className="mgr-tool-group" role="toolbar" aria-label="Add repositories">
+            <p className="mgr-tool-label">Add repositories</p>
+            <div className="mgr-tool-row">
+              <IconAct label="Clone" hint="Clone from a Git URL" onClick={onClone}>
+                <IcoClone />
+              </IconAct>
+              <IconAct label="Add" hint="Add an existing Git folder" onClick={onAdd}>
+                <IcoAddRepo />
+              </IconAct>
+              <IconAct label="New" hint="Create a new repository" onClick={onInit}>
+                <IcoCreate />
+              </IconAct>
+              <IconAct label="Scan" hint="Find Git repos in folders" onClick={() => void scanFolders()}>
+                <IcoScan />
+              </IconAct>
+              <IconAct
+                label="Rescan"
+                hint="Rescan watched folders"
+                disabled={!settings?.watchedRoots?.length || !!busy}
+                busy={busy === 'rescan'}
+                onClick={() => void rescan()}
+              >
+                <IcoRefresh />
+              </IconAct>
+            </div>
+          </div>
+          <div className="mgr-tool-group" role="toolbar" aria-label={`Sync ${actionHint}`}>
+            <p className="mgr-tool-label">Sync {actionHint}</p>
+            <div className="mgr-tool-row">
+              <IconAct
+                label="Refresh"
+                hint={`Refresh status of ${actionHint}`}
+                disabled={!!busy || !actionCount}
+                busy={busy === 'refresh'}
+                onClick={() => void runBulk('refresh')}
+              >
+                <IcoRefresh />
+              </IconAct>
+              <IconAct
+                label="Fetch"
+                hint={`Fetch remotes for ${actionHint}`}
+                disabled={!!busy || !actionCount}
+                busy={busy === 'fetch'}
+                onClick={() => void runBulk('fetch')}
+              >
+                <IcoFetch />
+              </IconAct>
+              <IconAct
+                label="Pull"
+                hint={`Pull ${actionHint}`}
+                disabled={!!busy || !actionCount}
+                busy={busy === 'pull'}
+                onClick={() => void runBulk('pull')}
+              >
+                <IcoPull />
+              </IconAct>
+              <IconAct
+                label="Push"
+                hint={`Push ${actionHint}`}
+                disabled={!!busy || !actionCount}
+                busy={busy === 'push'}
+                onClick={() => void runBulk('push')}
+              >
+                <IcoPush />
+              </IconAct>
+            </div>
+          </div>
         </div>
         {scan ? (
-          <p className="hint" title={scan}>
+          <p className="hint mgr-status" title={scan} role="status">
             {scan}
           </p>
         ) : null}
@@ -453,39 +553,51 @@ export function RepoHome({
                 <div className="hint">Shift-click a range to fetch, pull, pin, mark as safe, or remove only those repos.</div>
               </div>
             </div>
-            <div className="row-btns">
-              <button className="primary" disabled={!!busy} onClick={() => void runBulk('fetch')}>
-                Fetch
-              </button>
-              <button className="ghost" disabled={!!busy} onClick={() => void runBulk('pull')}>
-                Pull
-              </button>
-              <button className="ghost" disabled={!!busy} onClick={() => void runBulk('push')}>
-                Push
-              </button>
-              <button className="ghost" disabled={!!busy} onClick={() => void runBulk('refresh')}>
-                Refresh
-              </button>
-              {unsafePicked.length > 0 && (
-                <button
-                  className="ghost"
+            <div className="repo-actions">
+              <div className="cluster" role="toolbar" aria-label="Sync selected">
+                <IconAct bare label="Fetch" hint="Fetch selected" disabled={!!busy} onClick={() => void runBulk('fetch')}>
+                  <IcoFetch />
+                </IconAct>
+                <IconAct bare label="Pull" hint="Pull selected" disabled={!!busy} onClick={() => void runBulk('pull')}>
+                  <IcoPull />
+                </IconAct>
+                <IconAct bare label="Push" hint="Push selected" disabled={!!busy} onClick={() => void runBulk('push')}>
+                  <IcoPush />
+                </IconAct>
+                <IconAct
+                  bare
+                  label="Refresh"
+                  hint="Refresh selected"
                   disabled={!!busy}
-                  onClick={() => void markSafe(unsafePicked)}
+                  busy={busy === 'refresh'}
+                  onClick={() => void runBulk('refresh')}
                 >
-                  {busy === 'safe'
-                    ? 'Trusting...'
-                    : `Mark ${unsafePicked.length} as safe`}
-                </button>
-              )}
-              <button className="ghost" onClick={() => void pinPicked(true)}>
-                Pin
-              </button>
-              <button className="ghost" onClick={() => void pinPicked(false)}>
-                Unpin
-              </button>
-              <button className="ghost" onClick={() => void removePicked()}>
-                Remove
-              </button>
+                  <IcoRefresh />
+                </IconAct>
+              </div>
+              <div className="cluster" role="toolbar" aria-label="Organize selected">
+                {unsafePicked.length > 0 && (
+                  <IconAct
+                    bare
+                    label="Mark as safe"
+                    hint={`Mark ${unsafePicked.length} as safe`}
+                    disabled={!!busy}
+                    busy={busy === 'safe'}
+                    onClick={() => void markSafe(unsafePicked)}
+                  >
+                    <IcoShield />
+                  </IconAct>
+                )}
+                <IconAct bare label="Pin" hint="Pin selected" pressed onClick={() => void pinPicked(true)}>
+                  <IcoPin filled />
+                </IconAct>
+                <IconAct bare label="Unpin" hint="Unpin selected" onClick={() => void pinPicked(false)}>
+                  <IcoUnpin />
+                </IconAct>
+                <IconAct bare danger label="Remove" hint="Remove selected from the list" onClick={() => void removePicked()}>
+                  <IcoTrash />
+                </IconAct>
+              </div>
             </div>
             <ul className="picked-list">
               {picked.map((path) => {
@@ -520,25 +632,57 @@ export function RepoHome({
               <p className="hint">{overview ? 'Refreshing repository status...' : 'Analyzing...'}</p>
             )}
             {overview?.error && <div className="banner warn">{overview.error}</div>}
-            <div className="row-btns">
-              <button className="primary" onClick={() => onOpen(current.path, current.name)}>
+            <div className="repo-actions">
+              <button type="button" className="primary ico-text" onClick={() => onOpen(current.path, current.name)}>
+                <IcoHome />
                 Open
               </button>
-              <button className="ghost" onClick={() => void window.spoon.app.openIn(current.path, 'editor')}>
-                Editor
-              </button>
-              <button className="ghost" onClick={() => void window.spoon.app.openIn(current.path, 'terminal')}>
-                Terminal
-              </button>
-              <button className="ghost" onClick={() => void window.spoon.app.openIn(current.path, 'explorer')}>
-                Explorer
-              </button>
-              <button className="ghost" onClick={() => void togglePin(current.path)}>
-                {pinned.includes(current.path) ? 'Unpin' : 'Pin'}
-              </button>
-              <button className="ghost" onClick={() => void removeRepo(current.path)}>
-                Remove
-              </button>
+              <div className="cluster" role="toolbar" aria-label="Open elsewhere">
+                <IconAct
+                  bare
+                  label="Editor"
+                  hint="Open in editor"
+                  onClick={() => void window.spoon.app.openIn(current.path, 'editor')}
+                >
+                  <IcoCode />
+                </IconAct>
+                <IconAct
+                  bare
+                  label="Terminal"
+                  hint="Open in terminal"
+                  onClick={() => void window.spoon.app.openIn(current.path, 'terminal')}
+                >
+                  <IcoConsole />
+                </IconAct>
+                <IconAct
+                  bare
+                  label="Explorer"
+                  hint="Reveal in file explorer"
+                  onClick={() => void window.spoon.app.openIn(current.path, 'explorer')}
+                >
+                  <IcoOpen />
+                </IconAct>
+              </div>
+              <div className="cluster" role="toolbar" aria-label="Organize">
+                <IconAct
+                  bare
+                  label={pinned.includes(current.path) ? 'Unpin' : 'Pin'}
+                  hint={pinned.includes(current.path) ? 'Unpin this repository' : 'Pin this repository'}
+                  pressed={pinned.includes(current.path)}
+                  onClick={() => void togglePin(current.path)}
+                >
+                  <IcoPin filled={pinned.includes(current.path)} />
+                </IconAct>
+                <IconAct
+                  bare
+                  danger
+                  label="Remove"
+                  hint="Remove from the list"
+                  onClick={() => void removeRepo(current.path)}
+                >
+                  <IcoTrash />
+                </IconAct>
+              </div>
             </div>
             <HealthList
               health={health}
@@ -552,11 +696,86 @@ export function RepoHome({
         ) : (
           <div className="empty-hero pop-in">
             <SpoonMark />
-            <p>Clone, add, scan folders, or create a repository to get started.</p>
+            <p>Use Add repositories to clone, scan folders, or create one.</p>
           </div>
         )}
       </div>
     </div>
+  )
+}
+
+function StatChip({
+  id,
+  count,
+  label,
+  tone,
+  hint,
+  active,
+  onClick
+}: {
+  id: StatusFilter
+  count: number
+  label: string
+  tone?: string
+  hint: string
+  active: boolean
+  onClick: (id: StatusFilter) => void
+}) {
+  const empty = id !== 'all' && count === 0
+  const toneClass = tone && (count > 0 || active) ? ` ${tone}` : ''
+  return (
+    <button
+      type="button"
+      className={`stat-pill${toneClass}${active ? ' on' : ''}`}
+      aria-pressed={active}
+      title={hint}
+      aria-label={`${hint} (${count})`}
+      disabled={empty}
+      onClick={() => onClick(id)}
+    >
+      <b>{count}</b> {label}
+    </button>
+  )
+}
+
+function IconAct({
+  label,
+  hint,
+  children,
+  onClick,
+  disabled,
+  busy,
+  danger,
+  pressed,
+  bare
+}: {
+  label: string
+  hint?: string
+  children: ReactNode
+  onClick: () => void
+  disabled?: boolean
+  busy?: boolean
+  danger?: boolean
+  pressed?: boolean
+  bare?: boolean
+}) {
+  const name = hint ?? label
+  return (
+    <button
+      type="button"
+      className={`ico-act${bare ? ' bare' : ''}${danger ? ' danger' : ''}${busy ? ' busy' : ''}${pressed ? ' on' : ''}`}
+      title={name}
+      aria-label={name}
+      aria-pressed={pressed === undefined ? undefined : pressed}
+      aria-busy={busy || undefined}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <span className="ico-wrap" aria-hidden>
+        {children}
+      </span>
+      {bare ? null : <span>{label}</span>}
+    </button>
   )
 }
 
@@ -578,14 +797,16 @@ function HealthList({
       <div className="health-head">
         <strong>Health</strong>
         <span className="hint">{issues.length ? `${issues.length} issue${issues.length === 1 ? '' : 's'}` : 'Looks good'}</span>
-        <button className="ghost" onClick={onDeep}>
-          Deep check
-        </button>
-        {canAuto && (
-          <button className="ghost" onClick={onFixSafe}>
-            Fix safe issues
-          </button>
-        )}
+        <div className="cluster" role="toolbar" aria-label="Health actions">
+          <IconAct bare label="Deep check" hint="Run git fsck" onClick={onDeep}>
+            <IcoDeep />
+          </IconAct>
+          {canAuto && (
+            <IconAct bare label="Fix safe issues" hint="Fix safe issues automatically" onClick={onFixSafe}>
+              <IcoWrench />
+            </IconAct>
+          )}
+        </div>
       </div>
       {!issues.length && <p className="hint">No problems detected. Deep check runs git fsck.</p>}
       {issues.map((issue) => (
@@ -721,6 +942,24 @@ function issueScore(o?: RepoOverview): number {
   if (o.operation) return 1
   if (o.behind || o.ahead || o.staged + o.unstaged) return 2
   return 3
+}
+
+function matchesStatus(o: RepoOverview | undefined, filter: StatusFilter): boolean {
+  if (filter === 'all') return true
+  if (!o) return false
+  if (filter === 'dirty') return o.staged + o.unstaged + o.untracked > 0
+  if (filter === 'behind') return o.behind > 0
+  if (filter === 'ahead') return o.ahead > 0
+  return !!(o.error || o.unsafe || o.conflicts)
+}
+
+function emptyFilterLabel(filter: StatusFilter, hasQuery: boolean): string {
+  if (hasQuery) return 'No matches.'
+  if (filter === 'dirty') return 'No dirty repositories.'
+  if (filter === 'behind') return 'No repositories behind remote.'
+  if (filter === 'ahead') return 'Nothing to push.'
+  if (filter === 'blocked') return 'No blocked repositories.'
+  return 'No matches.'
 }
 
 function summarize(overviews: Record<string, RepoOverview>, recent: RepoSummary[]) {

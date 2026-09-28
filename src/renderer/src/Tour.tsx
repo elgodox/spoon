@@ -16,7 +16,7 @@ const STEPS: TourStep[] = [
   {
     id: 'home',
     title: 'Home is the repository manager',
-    body: 'Scan folders, clone, add an existing repo, or create a new one. Pin the ones you use every day and refresh them in bulk.',
+    body: 'Add repositories in the first group, then sync them in bulk. Pin the ones you use every day.',
     target: '[data-tour="home"]'
   },
   {

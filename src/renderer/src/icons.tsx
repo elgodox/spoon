@@ -119,3 +119,76 @@ export const IcoHelp = () => (
     <path d="M12 17.2h.01" />
   </S>
 )
+export const IcoClone = () => (
+  <S>
+    <path d="M8 7H5v13h10v-3" />
+    <path d="M9 4h10v13H9z" />
+  </S>
+)
+export const IcoAddRepo = () => (
+  <S>
+    <path d="M3 7h6l2 2h10v11H3z" />
+    <path d="M12 13v5M9.5 15.5h5" />
+  </S>
+)
+export const IcoCreate = () => (
+  <S>
+    <rect x="4" y="4" width="16" height="16" rx="2.5" />
+    <path d="M12 8v8M8 12h8" />
+  </S>
+)
+export const IcoScan = () => (
+  <S>
+    <path d="M3 8h6l2 2h10v10H3z" />
+    <circle cx="14" cy="15" r="2.6" />
+    <path d="M16 17l2.4 2.4" />
+  </S>
+)
+export const IcoPin = ({ filled = false }: { filled?: boolean }) => (
+  <S>
+    <path
+      d="M9 3.5h6v6c0 1.15.45 1.9 1.25 2.6L18 14H6l1.75-1.9C8.55 11.4 9 10.65 9 9.5z"
+      fill={filled ? 'currentColor' : 'none'}
+    />
+    <path d="M12 14v7" />
+  </S>
+)
+export const IcoUnpin = () => (
+  <S>
+    <path d="M9 3.5h6v6c0 1.15.45 1.9 1.25 2.6L18 14H6l1.75-1.9C8.55 11.4 9 10.65 9 9.5z" />
+    <path d="M12 14v7" />
+    <path d="M5 5l14 14" />
+  </S>
+)
+export const IcoTrash = () => (
+  <S>
+    <path d="M5 7h14" />
+    <path d="M9 7V5h6v2" />
+    <path d="M7 7l1 13h8l1-13" />
+    <path d="M10 11v5M14 11v5" />
+  </S>
+)
+export const IcoCode = () => (
+  <S>
+    <path d="M8 8L4 12l4 4" />
+    <path d="M16 8l4 4-4 4" />
+  </S>
+)
+export const IcoShield = () => (
+  <S>
+    <path d="M12 3.2l8 3.2v6.2c0 4.8-3.3 8.1-8 9.6-4.7-1.5-8-4.8-8-9.6V6.4z" />
+    <path d="M9 12.2l2.1 2.1 4.2-4.4" />
+  </S>
+)
+export const IcoDeep = () => (
+  <S>
+    <circle cx="11" cy="11" r="6.2" />
+    <path d="M15.5 15.5L21 21" />
+    <path d="M11 8.4v3.1l2 1.2" />
+  </S>
+)
+export const IcoWrench = () => (
+  <S>
+    <path d="M14.5 6.5a4 4 0 0 0-5.6 5.6L4 16.9 7.1 20l5-4.9a4 4 0 0 0 5.6-5.6L15.5 12 12 8.5z" />
+  </S>
+)
