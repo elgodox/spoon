@@ -30,7 +30,7 @@ Layout is familiar: repo tabs, a refs sidebar, a commit graph, a changes view, a
 
 **Requirements:** Windows 10 or 11 (x64) and [Git for Windows](https://git-scm.com/download/win).
 
-1. Download **Spoon-Setup-1.2.1.exe** from the [latest release](https://github.com/elgodox/spoon/releases/latest).
+1. Download **Spoon-Setup-1.2.2.exe** from the [latest release](https://github.com/elgodox/spoon/releases/latest).
 2. Run the installer. You can pick the folder; it creates Start Menu and desktop shortcuts.
 3. If Windows SmartScreen appears, choose **More info → Run anyway**. The installer is not code-signed.
 
@@ -41,7 +41,7 @@ API keys and OAuth tokens stay on this machine (`%APPDATA%\spoon\spoon.json`). T
 ## Quick start
 
 1. Open **Home** (Repository Manager).
-2. **Scan folders** to find every Git repo under one or more directories (Ctrl+click to pick several), or **Clone** / **Add existing** / **Create new**.
+2. **Scan folders** to find every Git repo under a directory (Ctrl+click to pick several), or **Add** a repo folder — if that folder is not a repository, Spoon looks inside it. You can also **Clone** or **Create new**.
 3. Open a repo. Use **Changes** to stage files (Ctrl/Shift for multi-select) and write the message. The first launch walks you through Home, sync, and AI.
 4. **AI** in Preferences: connect Grok, ChatGPT, Claude, or a site from the catalog (OpenRouter, Groq, Gemini, Ollama, …). You can also paste any OpenAI-compatible base URL. If nothing is connected, AI message, Analyze, and AI commit open this pane.
 
@@ -50,7 +50,7 @@ API keys and OAuth tokens stay on this machine (`%APPDATA%\spoon\spoon.json`). T
 **Repositories**
 - Tabs for several repos at once
 - Scan folders for Git repositories
-- Clone, add an existing folder, or init a new repo
+- Clone, add a folder (or every Git repo inside it), or init a new repo
 - Refresh, fetch, or pull every listed repo in one pass
 - Health check with one-click repairs (unsafe folder, stale lock, missing upstream, gc, …)
 - Open a submodule in its own tab (initializes it if needed)
@@ -142,7 +142,7 @@ Windows installer:
 npm run pack
 ```
 
-Output: `dist/Spoon-Setup-1.2.1.exe`.
+Output: `dist/Spoon-Setup-1.2.2.exe`.
 
 ## Git operations
 

@@ -3,6 +3,10 @@ import type { AboutInfo, UpdateState } from '../../shared/types'
 import { IcoClose, IcoHelp, IcoRefresh } from './icons'
 
 const NOTES: Record<string, string[]> = {
+  '1.2.2': [
+    'Add and Scan look inside a folder when it is not a Git repository.',
+    'Choosing a parent folder adds every Git repository found under it.'
+  ],
   '1.2.1': [
     'About Spoon from the toolbar mark, with version notes and updates.',
     'Commit bar stays at the bottom, with icons and a rounded model menu.',
