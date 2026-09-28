@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import type { BulkResult, RepoHealth, RepoIssue, RepoOverview, RepoSort, RepoSummary, Settings } from '../../shared/types'
 import { bindDrag, clamp, catchErr, formatAgo } from './lib'
 
@@ -34,12 +34,14 @@ export function RepoHome({
   const [scan, setScan] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [overviews, setOverviews] = useState<Record<string, RepoOverview>>({})
+  const [analyzing, setAnalyzing] = useState<Set<string>>(() => new Set())
   const [health, setHealth] = useState<RepoHealth | null>(null)
   const [bulk, setBulk] = useState<BulkResult[] | null>(null)
   const [picked, setPicked] = useState<string[]>([])
   const [anchor, setAnchor] = useState<string | null>(null)
   const pinned = settings?.pinned ?? []
   const sort = settings?.repoSort ?? 'opened'
+  const overviewGen = useRef(0)
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase()
@@ -57,20 +59,41 @@ export function RepoHome({
   const current = recent.find((r) => r.path === sel)
   const overview = sel ? overviews[sel] : undefined
 
+  const markAnalyzing = useCallback((paths: string[], on: boolean) => {
+    setAnalyzing((prev) => {
+      const next = new Set(prev)
+      for (const path of paths) {
+        if (on) next.add(path)
+        else next.delete(path)
+      }
+      return next
+    })
+  }, [])
+
   const refreshOverviews = useCallback(async (paths = recent.map((r) => r.path)) => {
+    const gen = ++overviewGen.current
     if (!paths.length) {
-      setOverviews({})
+      if (gen === overviewGen.current) {
+        setOverviews({})
+        setAnalyzing(new Set())
+      }
       return
     }
+    markAnalyzing(paths, true)
     const chunk = 40
-    const next: Record<string, RepoOverview> = {}
     for (let i = 0; i < paths.length; i += chunk) {
+      if (gen !== overviewGen.current) return
       const slice = paths.slice(i, i + chunk)
       const rows = (await window.spoon.repo.overview(slice)) as RepoOverview[]
-      for (const row of rows) next[row.path] = row
+      if (gen !== overviewGen.current) return
+      setOverviews((prev) => {
+        const next = { ...prev }
+        for (const row of rows) next[row.path] = row
+        return next
+      })
+      markAnalyzing(slice, false)
     }
-    setOverviews((prev) => ({ ...prev, ...next }))
-  }, [recent])
+  }, [markAnalyzing, recent])
 
   useEffect(() => {
     void refreshOverviews()
@@ -125,11 +148,15 @@ export function RepoHome({
 
   async function rescan() {
     setBusy('rescan')
+    markAnalyzing(recent.map((r) => r.path), true)
     try {
       const next = (await window.spoon.repo.rescan()) as RepoSummary[]
       onRecent(next)
       setScan(next.length ? `Watching ${next.length} repositories.` : 'Scan a folder first.')
       await refreshOverviews(next.map((r) => r.path))
+    } catch (e) {
+      markAnalyzing(recent.map((r) => r.path), false)
+      await window.spoon.app.error(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(null)
     }
@@ -140,6 +167,7 @@ export function RepoHome({
     if (!paths.length) return
     setBusy(action)
     setBulk(null)
+    if (action === 'refresh' || action === 'fetch') markAnalyzing(paths, true)
     try {
       const results = (await window.spoon.repo.bulk(action, paths)) as BulkResult[]
       setBulk(results)
@@ -149,6 +177,7 @@ export function RepoHome({
         setHealth(h)
       }
     } catch (e) {
+      markAnalyzing(paths, false)
       await window.spoon.app.error(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(null)
@@ -320,6 +349,7 @@ export function RepoHome({
         {filtered.map((r) => {
           const o = overviews[r.path]
           const on = picked.includes(r.path)
+          const checking = analyzing.has(r.path) || !o
           return (
             <div
               key={r.path}
@@ -329,10 +359,10 @@ export function RepoHome({
             >
               <span
                 className={`dot ${dotTone(o)}${pinned.includes(r.path) ? ' pin' : ''}`}
-                title={dotTitle(o, pinned.includes(r.path))}
+                title={checking ? 'Analyzing...' : dotTitle(o, pinned.includes(r.path))}
               />
               <span className="label">{r.name}</span>
-              <RepoBadges overview={o} compact />
+              <RepoBadges overview={o} compact analyzing={checking} />
             </div>
           )
         })}
@@ -460,12 +490,13 @@ export function RepoHome({
             <ul className="picked-list">
               {picked.map((path) => {
                 const repo = recent.find((r) => r.path === path)
+                const checking = analyzing.has(path) || !overviews[path]
                 return (
                   <li key={path}>
                     <button className="linkish" onClick={() => setSel(path)}>
                       {repo?.name ?? path}
                     </button>
-                    <RepoBadges overview={overviews[path]} compact />
+                    <RepoBadges overview={overviews[path]} compact analyzing={checking} />
                   </li>
                 )
               })}
@@ -478,13 +509,16 @@ export function RepoHome({
                 <h2>{current.name}</h2>
                 <div className="hint path">{current.path}</div>
               </div>
-              <RepoBadges overview={overview} />
+              <RepoBadges overview={overview} analyzing={analyzing.has(current.path) || !overview} />
             </div>
             <div className="stat-row tight">
               <span>{overview?.branch ? (overview.detached ? 'detached HEAD' : overview.branch) : '...'}</span>
               {overview?.lastCommit && <span>{overview.lastCommit.subject}</span>}
               <span>Opened {current.lastOpened ? formatAgo(current.lastOpened) : 'never'}</span>
             </div>
+            {(analyzing.has(current.path) || !overview) && (
+              <p className="hint">{overview ? 'Refreshing repository status...' : 'Analyzing...'}</p>
+            )}
             {overview?.error && <div className="banner warn">{overview.error}</div>}
             <div className="row-btns">
               <button className="primary" onClick={() => onOpen(current.path, current.name)}>
@@ -601,9 +635,26 @@ function BulkSummary({ results, onClear }: { results: BulkResult[]; onClear: () 
   )
 }
 
-function RepoBadges({ overview, compact }: { overview?: RepoOverview; compact?: boolean }) {
-  if (!overview) return compact ? null : <span className="hint">Checking...</span>
+function RepoBadges({
+  overview,
+  compact,
+  analyzing
+}: {
+  overview?: RepoOverview
+  compact?: boolean
+  analyzing?: boolean
+}) {
+  if (!overview) {
+    return compact ? (
+      <span className="badges">
+        <span className="chip">Analyzing...</span>
+      </span>
+    ) : (
+      <span className="hint">Analyzing...</span>
+    )
+  }
   const bits: { key: string; label: string; cls: string }[] = []
+  if (analyzing) bits.push({ key: 'scan', label: 'Analyzing...', cls: '' })
   if (overview.unsafe) bits.push({ key: 'unsafe', label: 'unsafe', cls: 'err' })
   else if (overview.error) bits.push({ key: 'err', label: 'error', cls: 'err' })
   if (overview.operation) bits.push({ key: 'op', label: overview.operation, cls: 'warn' })
@@ -613,10 +664,11 @@ function RepoBadges({ overview, compact }: { overview?: RepoOverview; compact?: 
   if (overview.behind) bits.push({ key: 'b', label: `${overview.behind} behind`, cls: 'info' })
   if (overview.ahead) bits.push({ key: 'a', label: `${overview.ahead} ahead`, cls: 'info' })
   if (!bits.length && !compact) bits.push({ key: 'ok', label: 'clean', cls: 'ok' })
+  if (!bits.length) return null
   return (
     <span className="badges">
       {bits.map((b) => (
-        <span key={b.key} className={`chip ${b.cls}`}>
+        <span key={b.key} className={`chip ${b.cls}`.trim()}>
           {b.label}
         </span>
       ))}
@@ -635,7 +687,7 @@ function dotTone(o?: RepoOverview): string {
 function dotTitle(o: RepoOverview | undefined, pinned: boolean): string {
   const bits: string[] = []
   if (pinned) bits.push('Pinned')
-  if (!o) return bits.join(' · ') || 'Checking'
+  if (!o) return bits.join(' · ') || 'Analyzing...'
   if (o.unsafe) bits.push('Git does not trust this folder')
   else if (o.error) bits.push(o.error)
   if (o.conflicts) bits.push(`${o.conflicts} conflict(s)`)

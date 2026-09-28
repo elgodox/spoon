@@ -34,7 +34,7 @@ const STEPS: TourStep[] = [
   {
     id: 'ai',
     title: 'AI writes the message',
-    body: 'Free AI works with no account. AI message only fills the box. AI commit stays local — push is always a separate action.',
+    body: 'Free AI writes a message with no account. If that route is down, add OpenRouter in Preferences (openrouter.ai). AI message only fills the box. AI commit stays local — push is always a separate action.',
     target: '[data-tour="ai"]'
   },
   {

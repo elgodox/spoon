@@ -5,6 +5,19 @@ export const BUILTIN_AI_IDS: AiProviderId[] = ['free', 'grok', 'chatgpt', 'claud
 export const AI_PROVIDER_IDS = BUILTIN_AI_IDS
 export const PAID_AI_PROVIDERS: AiProviderId[] = ['grok', 'chatgpt', 'claude']
 
+/** Anonymous Pollinations text models (and aliases). Anything else 404s. */
+export const FREE_AI_MODEL_IDS = ['openai', 'openai-fast', 'gpt-oss', 'gpt-oss-20b', 'ovh-reasoning'] as const
+
+export function isFreeAiModel(id: string): boolean {
+  return (FREE_AI_MODEL_IDS as readonly string[]).includes(id.trim())
+}
+
+export function freeAiModelId(model?: string): string {
+  const id = (model || 'openai').trim()
+  if (id === 'openai-fast') return 'openai-fast'
+  return 'openai'
+}
+
 export const AI_MODELS: Record<string, { id: string; label: string }[]> = {
   free: [
     { id: 'openai', label: 'Free (GPT-OSS 20B)' },
@@ -45,7 +58,10 @@ export function listedProviderIds(settings?: Settings | null): AiProviderId[] {
 
 export function defaultModelFor(id: AiProviderId, settings?: Settings | null): string {
   const saved = settings?.aiModels?.[id]
-  if (saved) return saved
+  if (saved) {
+    if (id === 'free' && !isFreeAiModel(saved)) return DEFAULT_AI_MODELS.free
+    return saved
+  }
   if (DEFAULT_AI_MODELS[id]) return DEFAULT_AI_MODELS[id]
   const endpoint = settings?.aiEndpoints?.find((item) => item.id === id) ?? findAiSite(id)
   return endpoint?.defaultModel || 'gpt-4o-mini'

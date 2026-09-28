@@ -1,4 +1,5 @@
 import { findAiSite, openAiUrl } from '../shared/ai-catalog'
+import { freeAiModelId } from '../shared/models'
 import type { AiEndpointConfig, AiProviderId, ChangeAnalysis } from '../shared/types'
 import { fallbackAnalysis, parseAnalysis } from './analysis'
 import { changeBrief } from './git'
@@ -151,27 +152,23 @@ async function freeComplete(
     { role: 'system', content: system },
     { role: 'user', content: user }
   ]
-  const body = {
-    model: model || 'openai',
+  const chosen = freeAiModelId(model)
+  const shared = {
     temperature: 0.2,
     ...(maxTokens ? { max_tokens: maxTokens } : {}),
     messages
   }
+  // gen.pollinations.ai now requires a key. Anonymous text.pollinations.ai and llm7 still complete.
   const attempts: { url: string; headers: Record<string, string>; body: Record<string, unknown> }[] = [
     {
       url: 'https://text.pollinations.ai/openai',
-      headers: { Referer: 'https://pollinations.ai/' },
-      body
-    },
-    {
-      url: 'https://gen.pollinations.ai/v1/chat/completions',
-      headers: { Referer: 'https://pollinations.ai/' },
-      body
+      headers: {},
+      body: { ...shared, model: chosen }
     },
     {
       url: 'https://api.llm7.io/v1/chat/completions',
       headers: { Authorization: 'Bearer unused' },
-      body: { ...body, model: 'default' }
+      body: { ...shared, model: 'default' }
     }
   ]
   const errors: string[] = []
@@ -189,21 +186,68 @@ async function freeComplete(
       })
       const data = (await res.json().catch(() => ({}))) as {
         error?: { message?: string } | string
-        choices?: { message?: { content?: string } }[]
       }
       if (!res.ok) {
         const err = data.error
         errors.push(typeof err === 'string' ? err : err?.message || `${res.status} ${res.statusText}`)
         continue
       }
-      const text = data.choices?.[0]?.message?.content?.trim()
+      const text = completionText(data)
       if (text) return cleanMessage(text)
       errors.push('Empty Free AI response')
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error))
     }
   }
-  throw new Error(errors[0] ? `Free AI could not generate a commit message. ${errors[0]}` : 'Free AI could not generate a commit message.')
+  const fallback = await pollinationsGetFallback(system, user, chosen)
+  if (fallback) return cleanMessage(fallback)
+  const first = errors[0] || 'No response'
+  throw new Error(
+    `Free AI could not generate a commit message. ${first} Add OpenRouter in Preferences → AI (https://openrouter.ai) and create a free account.`
+  )
+}
+
+async function pollinationsGetFallback(system: string, user: string, model: string): Promise<string> {
+  try {
+    const prompt = `${system}\n\n${user}`.slice(0, 1200)
+    const url = `https://text.pollinations.ai/${encodeURIComponent(prompt)}?model=${encodeURIComponent(model)}`
+    const res = await fetch(url, {
+      headers: { Accept: 'text/plain, application/json' },
+      signal: AbortSignal.timeout(45_000)
+    })
+    const raw = (await res.text()).trim()
+    if (!res.ok || !raw || raw.startsWith('<')) return ''
+    if (raw.startsWith('{')) {
+      try {
+        return completionText(JSON.parse(raw) as object)
+      } catch {
+        return ''
+      }
+    }
+    return raw
+  } catch {
+    return ''
+  }
+}
+
+function completionText(data: unknown): string {
+  if (!data || typeof data !== 'object') return ''
+  const message = (data as { choices?: { message?: { content?: unknown } }[] }).choices?.[0]?.message
+  const content = message?.content
+  if (typeof content === 'string') return content.trim()
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (part && typeof part === 'object' && typeof (part as { text?: unknown }).text === 'string') {
+          return (part as { text: string }).text
+        }
+        return ''
+      })
+      .join('')
+      .trim()
+  }
+  return ''
 }
 
 async function grokComplete(

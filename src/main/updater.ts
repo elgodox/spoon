@@ -42,9 +42,28 @@ function wire(): void {
   autoUpdater.on('update-downloaded', (info) =>
     set({ status: 'ready', version: info.version, notes: notesText(info.releaseNotes) ?? state.notes, percent: 100 })
   )
-  autoUpdater.on('error', (err) =>
-    set({ ...state, status: 'error', error: err?.message?.split('\n')[0] ?? String(err) })
-  )
+  autoUpdater.on('error', (err) => {
+    const message = err?.message?.split('\n')[0] ?? String(err)
+    if (isQuietFeedMiss(message) && state.status !== 'downloading' && state.status !== 'ready') {
+      set({ status: 'none' })
+      return
+    }
+    set({ ...state, status: 'error', error: message })
+  })
+}
+
+/** GitHub latest.yml 404 / missing updater assets is "no update", not a failed install. */
+function isQuietFeedMiss(message: string): boolean {
+  const m = message.toLowerCase()
+  if (m.includes('cannot find latest.yml') || m.includes('cannot find latest-mac.yml') || m.includes('cannot find latest-linux.yml')) {
+    return true
+  }
+  if (/latest(\.yml|-mac\.yml|-linux\.yml)/.test(m) && (m.includes('404') || m.includes('not found') || m.includes('cannot find'))) {
+    return true
+  }
+  if (m.includes('unable to find latest version on github')) return true
+  if (m.includes('httperror: 404') && m.includes('latest.yml')) return true
+  return false
 }
 
 export function initUpdater(onChange: (s: UpdateState) => void, enabled: boolean): void {
@@ -77,7 +96,12 @@ export async function check(): Promise<UpdateState> {
   try {
     await autoUpdater.checkForUpdates()
   } catch (err) {
-    set({ status: 'error', error: err instanceof Error ? err.message.split('\n')[0] : String(err) })
+    const message = err instanceof Error ? err.message.split('\n')[0] : String(err)
+    if (isQuietFeedMiss(message)) {
+      set({ status: 'none' })
+    } else {
+      set({ status: 'error', error: message })
+    }
   }
   return state
 }

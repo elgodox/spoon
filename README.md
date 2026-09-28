@@ -102,8 +102,8 @@ In **Preferences → AI**:
 
 | Method | What it does |
 | --- | --- |
-| **Free AI** | No sign-in. Used automatically when no other provider is connected |
-| **Add a site** | OpenRouter, Groq, Gemini, Mistral, DeepSeek, Ollama, LM Studio, and more — paste a key if the site needs one |
+| **Free AI** | No sign-in. Anonymous Pollinations GPT-OSS (selected when nothing else is connected). If that route fails, add OpenRouter. |
+| **Add a site** | OpenRouter (free account at [openrouter.ai](https://openrouter.ai)), Groq, Gemini, Mistral, DeepSeek, Ollama, LM Studio, and more — paste a key if the site needs one |
 | **Custom endpoint** | Any OpenAI-compatible `base URL` + optional key + model id |
 | **Use local session** | Reuses a login already on the machine (`~/.grok/auth.json`, `~/.codex/auth.json`, `~/.claude/.credentials.json`) |
 | **Sign in with Grok** | OAuth PKCE or device code on `auth.x.ai` |

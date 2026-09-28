@@ -1,7 +1,7 @@
 import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DEFAULT_AI_MODELS } from '../shared/models'
+import { DEFAULT_AI_MODELS, isFreeAiModel } from '../shared/models'
 import type { AiProviderId, RepoSummary, Settings, ThemeMode } from '../shared/types'
 
 export interface StoredAiCreds {
@@ -60,6 +60,11 @@ function filePath(): string {
   return join(dir, 'spoon.json')
 }
 
+function sanitizeAiModels(models: Record<string, string>): Record<string, string> {
+  if (models.free && !isFreeAiModel(models.free)) models.free = DEFAULT_AI_MODELS.free
+  return models
+}
+
 let cache: StoreFile | null = null
 
 function load(): StoreFile {
@@ -74,7 +79,7 @@ function load(): StoreFile {
         // Existing installs already know the app; only brand-new users get the tour.
         onboarded: hadSettings && (parsed.recent?.length ?? 0) > 0,
         ...(parsed.settings as Partial<Settings> | undefined),
-        aiModels: { ...defaults.aiModels, ...(parsed.settings?.aiModels ?? {}) },
+        aiModels: sanitizeAiModels({ ...defaults.aiModels, ...(parsed.settings?.aiModels ?? {}) }),
         aiEndpoints: parsed.settings?.aiEndpoints ?? []
       },
       recent: parsed.recent ?? [],

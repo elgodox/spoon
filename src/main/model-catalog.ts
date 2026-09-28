@@ -1,5 +1,5 @@
 import { findAiSite, openAiUrl } from '../shared/ai-catalog'
-import { AI_MODELS, defaultModelFor } from '../shared/models'
+import { AI_MODELS, defaultModelFor, isFreeAiModel } from '../shared/models'
 import type { AiEndpointConfig, AiModelCatalog, AiModelChoice, AiProviderId } from '../shared/types'
 import { resolveCreds } from './oauth'
 import { getSettings, type StoredAiCreds } from './store'
@@ -74,7 +74,7 @@ function catalogOf(
 
 async function freeModels(): Promise<AiModelChoice[]> {
   const res = await fetch('https://text.pollinations.ai/models', {
-    headers: { accept: 'application/json', Referer: 'https://pollinations.ai/' },
+    headers: { accept: 'application/json' },
     signal: AbortSignal.timeout(20_000)
   })
   const data = (await res.json().catch(() => [])) as unknown
@@ -84,9 +84,11 @@ async function freeModels(): Promise<AiModelChoice[]> {
   const seen = new Set<string>()
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue
-    const item = row as { name?: unknown; description?: unknown; aliases?: unknown }
+    const item = row as { name?: unknown; description?: unknown; aliases?: unknown; tier?: unknown }
     const id = typeof item.name === 'string' ? item.name : ''
     if (!id || seen.has(id)) continue
+    const tier = typeof item.tier === 'string' ? item.tier : ''
+    if (tier && tier !== 'anonymous' && !isFreeAiModel(id)) continue
     seen.add(id)
     const description = typeof item.description === 'string' ? item.description : ''
     models.push(choice(id, description ? `${description}` : id))

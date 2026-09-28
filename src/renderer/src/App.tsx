@@ -642,6 +642,16 @@ export function App() {
   )
 }
 
+function quietUpdateMiss(error?: string): boolean {
+  if (!error) return false
+  const m = error.toLowerCase()
+  return (
+    m.includes('cannot find latest.yml') ||
+    (m.includes('latest.yml') && (m.includes('404') || m.includes('not found'))) ||
+    m.includes('unable to find latest version on github')
+  )
+}
+
 function UpdateBar({
   state,
   onCheck,
@@ -654,6 +664,9 @@ function UpdateBar({
   onDismiss: () => void
 }) {
   if (state.status === 'idle' || state.status === 'disabled' || state.status === 'none' || state.status === 'checking') {
+    return null
+  }
+  if (state.status === 'error' && quietUpdateMiss(state.error)) {
     return null
   }
   return (
@@ -2932,7 +2945,8 @@ function SettingsDialog({
       {tab === 'ai' && (
         <section className="prefs-pane">
           <p className="hint">
-            AI message fills the box. AI commit stays local. Analyze splits the worktree into one local commit per implementation.
+            AI message fills the box. AI commit stays local. Free AI needs no account. For a reliable key, add OpenRouter
+            (create an account at openrouter.ai) from the catalog below.
           </p>
 
           <div className="ai-active">
@@ -2968,6 +2982,14 @@ function SettingsDialog({
                       </span>
                     </span>
                   </button>
+                  {selected && p === 'free' && (
+                    <div className="ai-card-body">
+                      <p className="hint">
+                        Anonymous Pollinations GPT-OSS. If a request fails, add OpenRouter below and create a free account
+                        at openrouter.ai.
+                      </p>
+                    </div>
+                  )}
                   {selected && p !== 'free' && (
                     <div className="ai-card-body">
                       {BUILTIN_AI_IDS.includes(p) && (
@@ -3075,7 +3097,10 @@ function SettingsDialog({
           </div>
 
           <h3>Add a site</h3>
-          <p className="hint">OpenRouter, Groq, Gemini, Ollama, and other OpenAI-compatible APIs. Pick a card, paste a key if it needs one.</p>
+          <p className="hint">
+            OpenRouter is the recommended account option (free signup at openrouter.ai). Groq, Gemini, Ollama, and other
+            OpenAI-compatible APIs work too — pick a card and paste a key if it needs one.
+          </p>
           <div className="ai-grid">
             {catalogLeft.map((site) => (
               <div key={site.id} className={`ai-card ${adding === site.id ? 'on' : ''}`}>
@@ -3218,8 +3243,8 @@ function ModelField({
       <p className="hint">
         {provider === 'free'
           ? catalog?.live
-            ? `${catalog.models.length} free models. No account required.`
-            : catalog?.error || 'Free models  -  no account required.'
+            ? `${catalog.models.length} anonymous models. No account required. OpenRouter is the backup if this route is down.`
+            : catalog?.error || 'Anonymous GPT-OSS via Pollinations — no account required.'
           : catalog?.live
             ? `${catalog.models.length} models from ${name}. The list refreshes on its own.`
             : catalog?.error

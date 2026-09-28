@@ -6,7 +6,7 @@ export const AI_SITE_CATALOG: AiEndpointConfig[] = [
   {
     id: 'openrouter',
     label: 'OpenRouter',
-    blurb: 'One key for hundreds of models, including free routes.',
+    blurb: 'Create a free account at openrouter.ai, then paste a key. Hundreds of models, including free routes.',
     baseUrl: 'https://openrouter.ai/api/v1',
     defaultModel: 'openai/gpt-4o-mini',
     consoleUrl: 'https://openrouter.ai/keys',
