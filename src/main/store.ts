@@ -1,7 +1,7 @@
 import { app, nativeTheme, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DEFAULT_AI_MODELS, isFreeAiModel } from '../shared/models'
+import { DEFAULT_AI_MODELS, fallbackAiProvider } from '../shared/models'
 import type { AiProviderId, RepoSummary, Settings, ThemeMode } from '../shared/types'
 
 export interface StoredAiCreds {
@@ -39,7 +39,7 @@ const defaults: Settings = {
   pinned: [],
   onboarded: false,
   editor: 'code',
-  aiProvider: 'free',
+  aiProvider: 'grok',
   aiModels: { ...DEFAULT_AI_MODELS },
   aiEndpoints: [],
   aiCommitMode: 'fill',
@@ -66,8 +66,9 @@ function filePath(): string {
 }
 
 function sanitizeAiModels(models: Record<string, string>): Record<string, string> {
-  if (models.free && !isFreeAiModel(models.free)) models.free = DEFAULT_AI_MODELS.free
-  return models
+  const next = { ...models }
+  delete next.free
+  return next
 }
 
 let cache: StoreFile | null = null
@@ -85,12 +86,22 @@ function load(): StoreFile {
         onboarded: hadSettings && (parsed.recent?.length ?? 0) > 0,
         ...(parsed.settings as Partial<Settings> | undefined),
         theme: sanitizeTheme((parsed.settings as Partial<Settings> | undefined)?.theme),
+        aiProvider: fallbackAiProvider((parsed.settings as Partial<Settings> | undefined)?.aiProvider),
         aiModels: sanitizeAiModels({ ...defaults.aiModels, ...(parsed.settings?.aiModels ?? {}) }),
         aiEndpoints: parsed.settings?.aiEndpoints ?? []
       },
       recent: parsed.recent ?? [],
       folders: parsed.folders ?? [],
       creds: parsed.creds ?? {}
+    }
+    const migratedFree =
+      (parsed.settings as Partial<Settings> | undefined)?.aiProvider === 'free' || Boolean(parsed.settings?.aiModels?.free)
+    if (migratedFree) {
+      try {
+        save(cache)
+      } catch {
+        /* keep the in-memory migration even if the file cannot be rewritten */
+      }
     }
   } catch {
     cache = { settings: { ...defaults }, recent: [], folders: [], creds: {} }

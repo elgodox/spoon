@@ -6,7 +6,8 @@ const NOTES: Record<string, string[]> = {
   '1.2.1': [
     'About Spoon from the toolbar mark, with version notes and updates.',
     'Commit bar stays at the bottom, with icons and a rounded model menu.',
-    'Clearer image and SVG diffs, including side-by-side previews.'
+    'Clearer image and SVG diffs, including side-by-side previews.',
+    'Free AI removed. AI actions open Settings when no provider is connected.'
   ],
   '1.2.0': [
     'Health checks, bulk fetch/pull/push, and folder scan.',
@@ -14,9 +15,9 @@ const NOTES: Record<string, string[]> = {
     'Refreshed Home screen and repository list.'
   ],
   '1.1.0': [
-    'Free AI writes commit messages with no account.',
     'Add OpenRouter, Groq, Gemini, Ollama, and other OpenAI-compatible APIs.',
-    'Custom endpoint for any compatible base URL.'
+    'Custom endpoint for any compatible base URL.',
+    'AI commit messages with Grok, ChatGPT, or Claude.'
   ],
   '1.0.0': [
     'Repository tabs, folder scan, clone, add, and init.',

@@ -1,5 +1,5 @@
 import { findAiSite, openAiUrl } from '../shared/ai-catalog'
-import { AI_MODELS, defaultModelFor, isFreeAiModel } from '../shared/models'
+import { AI_MODELS, defaultModelFor } from '../shared/models'
 import type { AiEndpointConfig, AiModelCatalog, AiModelChoice, AiProviderId } from '../shared/types'
 import { resolveCreds } from './oauth'
 import { getSettings, type StoredAiCreds } from './store'
@@ -12,15 +12,13 @@ export async function listProviderModels(provider: AiProviderId, force = false):
   if (!force && hit && Date.now() - hit.at < TTL_MS) return hit.catalog
   try {
     const models =
-      provider === 'free'
-        ? await freeModels()
-        : provider === 'grok'
-          ? await grokModels(await resolveCreds(provider))
-          : provider === 'claude'
-            ? await claudeModels(await resolveCreds(provider))
-            : provider === 'chatgpt'
-              ? await openAiModels(await resolveCreds(provider))
-              : await compatModels(provider)
+      provider === 'grok'
+        ? await grokModels(await resolveCreds(provider))
+        : provider === 'claude'
+          ? await claudeModels(await resolveCreds(provider))
+          : provider === 'chatgpt'
+            ? await openAiModels(await resolveCreds(provider))
+            : await compatModels(provider)
     const catalog = catalogOf(
       provider,
       models.length ? dedupe(models) : fallbackModels(provider),
@@ -70,37 +68,6 @@ function catalogOf(
   error?: string
 ): AiModelCatalog {
   return { provider, models, live, error }
-}
-
-async function freeModels(): Promise<AiModelChoice[]> {
-  const res = await fetch('https://text.pollinations.ai/models', {
-    headers: { accept: 'application/json' },
-    signal: AbortSignal.timeout(20_000)
-  })
-  const data = (await res.json().catch(() => [])) as unknown
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
-  const rows = Array.isArray(data) ? data : []
-  const models: AiModelChoice[] = []
-  const seen = new Set<string>()
-  for (const row of rows) {
-    if (!row || typeof row !== 'object') continue
-    const item = row as { name?: unknown; description?: unknown; aliases?: unknown; tier?: unknown }
-    const id = typeof item.name === 'string' ? item.name : ''
-    if (!id || seen.has(id)) continue
-    const tier = typeof item.tier === 'string' ? item.tier : ''
-    if (tier && tier !== 'anonymous' && !isFreeAiModel(id)) continue
-    seen.add(id)
-    const description = typeof item.description === 'string' ? item.description : ''
-    models.push(choice(id, description ? `${description}` : id))
-    if (Array.isArray(item.aliases)) {
-      for (const alias of item.aliases) {
-        if (typeof alias !== 'string' || !alias || seen.has(alias)) continue
-        seen.add(alias)
-        models.push(choice(alias, description ? `${description} (${alias})` : alias))
-      }
-    }
-  }
-  return models
 }
 
 async function grokModels(creds: StoredAiCreds): Promise<AiModelChoice[]> {

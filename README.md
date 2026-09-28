@@ -24,7 +24,7 @@
 
 Spoon is a native desktop Git client for Windows. It uses the `git` you already have (including Git Credential Manager), so clone, fetch, and push work the same way they do in the terminal.
 
-Layout is familiar: repo tabs, a refs sidebar, a commit graph, a changes view, and a commit box. On top of that it writes commit messages with **Free AI**, **Grok**, **ChatGPT**, **Claude**, or any OpenAI-compatible API (OpenRouter, Groq, Gemini, Ollama, …), and can split a dirty worktree into one local commit per change.
+Layout is familiar: repo tabs, a refs sidebar, a commit graph, a changes view, and a commit box. On top of that it writes commit messages with **Grok**, **ChatGPT**, **Claude**, or any OpenAI-compatible API (OpenRouter, Groq, Gemini, Ollama, …), and can split a dirty worktree into one local commit per change.
 
 ## Install
 
@@ -43,7 +43,7 @@ API keys and OAuth tokens stay on this machine (`%APPDATA%\spoon\spoon.json`). T
 1. Open **Home** (Repository Manager).
 2. **Scan folders** to find every Git repo under one or more directories (Ctrl+click to pick several), or **Clone** / **Add existing** / **Create new**.
 3. Open a repo. Use **Changes** to stage files (Ctrl/Shift for multi-select) and write the message. The first launch walks you through Home, sync, and AI.
-4. **AI** in Preferences starts on **Free AI** (no account). Add Grok, ChatGPT, Claude, or a site from the catalog (OpenRouter, Groq, Gemini, Ollama, …). You can also paste any OpenAI-compatible base URL.
+4. **AI** in Preferences: connect Grok, ChatGPT, Claude, or a site from the catalog (OpenRouter, Groq, Gemini, Ollama, …). You can also paste any OpenAI-compatible base URL. If nothing is connected, AI message, Analyze, and AI commit open this pane.
 
 ## Features
 
@@ -72,7 +72,7 @@ API keys and OAuth tokens stay on this machine (`%APPDATA%\spoon\spoon.json`). T
 **AI**
 - Fill the commit box, or create a local commit — push is always a separate action
 - Analyze uncommitted work and propose one commit per implementation
-- **Free AI** works with no account, and is selected automatically when no other provider is connected
+- Connect Grok, ChatGPT, Claude, or a catalog site; AI actions open Settings if none is connected
 - Add OpenRouter, Groq, Gemini, Ollama, LM Studio, and other OpenAI-compatible APIs from the catalog, or paste a custom base URL
 - Live model list from the selected provider
 
@@ -102,7 +102,6 @@ In **Preferences → AI**:
 
 | Method | What it does |
 | --- | --- |
-| **Free AI** | No sign-in. Anonymous Pollinations GPT-OSS (selected when nothing else is connected). If that route fails, add OpenRouter. |
 | **Add a site** | OpenRouter (free account at [openrouter.ai](https://openrouter.ai)), Groq, Gemini, Mistral, DeepSeek, Ollama, LM Studio, and more — paste a key if the site needs one |
 | **Custom endpoint** | Any OpenAI-compatible `base URL` + optional key + model id |
 | **Use local session** | Reuses a login already on the machine (`~/.grok/auth.json`, `~/.codex/auth.json`, `~/.claude/.credentials.json`) |

@@ -43,15 +43,10 @@ export function detectLocalSessions(): Record<AiProviderId, { available: boolean
   const claude = readClaudeLocal()
   const chatgpt = readCodexLocal()
   return {
-    free: { available: false },
     grok: { available: !!grok, label: grok?.email || grok?.label },
     claude: { available: !!claude, label: claude?.label },
     chatgpt: { available: !!chatgpt, label: chatgpt?.label }
   }
-}
-
-export function freeCreds(): StoredAiCreds {
-  return { provider: 'free', method: 'imported', label: 'No account needed' }
 }
 
 function readJson(path: string): Record<string, unknown> | null {
@@ -115,7 +110,6 @@ function readCodexLocal(): StoredAiCreds | null {
 }
 
 export function importLocal(provider: AiProviderId): StoredAiCreds {
-  if (provider === 'free') return freeCreds()
   const creds =
     provider === 'grok' ? readGrokLocal() : provider === 'claude' ? readClaudeLocal() : readCodexLocal()
   if (!creds) throw new Error(`No local ${provider} session found.`)
@@ -124,7 +118,6 @@ export function importLocal(provider: AiProviderId): StoredAiCreds {
 }
 
 export function saveApiKey(provider: AiProviderId, apiKey: string): StoredAiCreds {
-  if (provider === 'free') return freeCreds()
   const trimmed = apiKey.trim()
   const site = findAiSite(provider) ?? getSettings().aiEndpoints.find((item) => item.id === provider)
   const creds: StoredAiCreds = {
@@ -148,10 +141,7 @@ export function saveApiKey(provider: AiProviderId, apiKey: string): StoredAiCred
 export function accounts(): AiAccount[] {
   const local = detectLocalSessions()
   const endpoints = getSettings().aiEndpoints ?? []
-  const builtin: AiAccount[] = (['free', ...PAID_AI_PROVIDERS] as AiProviderId[]).map((provider) => {
-    if (provider === 'free') {
-      return { provider, connected: true, method: 'imported', label: 'No account needed' }
-    }
+  const builtin: AiAccount[] = PAID_AI_PROVIDERS.map((provider) => {
     const stored = loadCreds(provider)
     return {
       provider,
@@ -162,7 +152,7 @@ export function accounts(): AiAccount[] {
     }
   })
   const extra: AiAccount[] = endpoints
-    .filter((item) => !['free', ...PAID_AI_PROVIDERS].includes(item.id))
+    .filter((item) => !PAID_AI_PROVIDERS.includes(item.id))
     .map((item) => {
       const stored = loadCreds(item.id)
       return {
@@ -175,13 +165,11 @@ export function accounts(): AiAccount[] {
   return [...builtin, ...extra]
 }
 
-export function applyFreeFallback(): Settings {
+export function ensureAiProvider(): Settings {
   const settings = getSettings()
-  if (settings.aiProvider === 'free') return settings
-  if (loadCreds(settings.aiProvider)) return settings
-  const endpoint = settings.aiEndpoints.find((item) => item.id === settings.aiProvider)
-  if (endpoint && !endpoint.needsKey) return settings
-  return patchSettings({ aiProvider: 'free' })
+  if (settings.aiProvider && settings.aiProvider !== 'free') return settings
+  const next = accounts().find((a) => a.connected)?.provider ?? 'grok'
+  return patchSettings({ aiProvider: next })
 }
 
 export function addEndpoint(endpoint: AiEndpointConfig, apiKey?: string): { accounts: AiAccount[]; settings: Settings } {
@@ -201,8 +189,11 @@ export function removeEndpoint(id: string): { accounts: AiAccount[]; settings: S
   clearCreds(id)
   const settings = getSettings()
   patchSettings({ aiEndpoints: (settings.aiEndpoints ?? []).filter((item) => item.id !== id) })
-  const next = applyFreeFallback()
-  return { accounts: accounts(), settings: next }
+  if (getSettings().aiProvider === id) {
+    const next = accounts().find((a) => a.connected)?.provider ?? 'grok'
+    patchSettings({ aiProvider: next })
+  }
+  return { accounts: accounts(), settings: getSettings() }
 }
 
 export function disconnect(provider: AiProviderId): void {
@@ -396,7 +387,6 @@ export async function refreshGrok(creds: StoredAiCreds): Promise<StoredAiCreds> 
 
 export async function openProviderConsole(provider: AiProviderId): Promise<void> {
   const builtins: Record<string, string> = {
-    free: 'https://pollinations.ai',
     grok: 'https://console.x.ai/team/default/api-keys',
     chatgpt: 'https://platform.openai.com/api-keys',
     claude: 'https://console.anthropic.com/settings/keys'
@@ -410,7 +400,6 @@ export async function openProviderConsole(provider: AiProviderId): Promise<void>
 }
 
 export async function resolveCreds(provider: AiProviderId): Promise<StoredAiCreds> {
-  if (provider === 'free') return freeCreds()
   let creds = loadCreds(provider)
   if (!creds) {
     const builtin = provider === 'grok' || provider === 'claude' || provider === 'chatgpt'

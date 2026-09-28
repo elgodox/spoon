@@ -14,11 +14,9 @@ import ollama from './assets/ai/ollama.svg?url'
 import openai from './assets/ai/openai.svg?url'
 import openrouter from './assets/ai/openrouter.svg?url'
 import perplexity from './assets/ai/perplexity.svg?url'
-import pollinations from './assets/ai/pollinations.svg?url'
 import together from './assets/ai/together.svg?url'
 
 const LOGOS: Record<string, string> = {
-  free: pollinations,
   grok,
   chatgpt: openai,
   claude,

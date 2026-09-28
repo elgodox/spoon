@@ -689,7 +689,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('ai:disconnect', (_e, provider: AiProviderId) => {
     oauth.disconnect(provider)
-    oauth.applyFreeFallback()
+    oauth.ensureAiProvider()
     return oauth.accounts()
   })
   ipcMain.handle('ai:console', (_e, provider: AiProviderId) => oauth.openProviderConsole(provider))
@@ -778,7 +778,7 @@ app.whenReady().then(async () => {
       }
     }
   }
-  oauth.applyFreeFallback()
+  oauth.ensureAiProvider()
 
   const firstArg = app.isPackaged ? 1 : 2
   const openArg = process.argv.find((a, i) => i >= firstArg && !a.startsWith('-') && existsSync(a))

@@ -30,7 +30,7 @@ import type {
 import { classifyMedia, formatBytes } from '../../shared/media'
 import { AI_SITE_CATALOG, customProviderId } from '../../shared/ai-catalog'
 import { ProviderIcon } from './ai-logos'
-import { AI_MODELS, BUILTIN_AI_IDS, DEFAULT_AI_MODELS, defaultModelFor, listedProviderIds, PAID_AI_PROVIDERS, providerLabel } from '../../shared/models'
+import { AI_MODELS, BUILTIN_AI_IDS, DEFAULT_AI_MODELS, defaultModelFor, fallbackAiProvider, hasConnectedAi, listedProviderIds, PAID_AI_PROVIDERS, providerLabel, resolveAiProvider } from '../../shared/models'
 import {
   IcoAi,
   IcoBranch,
@@ -177,7 +177,6 @@ export function App() {
   settingsRef.current = settings
   const [sidebarW, setSidebarW] = useState(220)
   const [catalogs, setCatalogs] = useState<Record<AiProviderId, AiModelCatalog>>({
-    free: { provider: 'free', models: AI_MODELS.free, live: false },
     grok: { provider: 'grok', models: AI_MODELS.grok, live: false },
     chatgpt: { provider: 'chatgpt', models: AI_MODELS.chatgpt, live: false },
     claude: { provider: 'claude', models: AI_MODELS.claude, live: false }
@@ -223,7 +222,6 @@ export function App() {
       })
     )
     const next: Record<string, AiModelCatalog> = {
-      free: { provider: 'free', models: AI_MODELS.free, live: false },
       grok: { provider: 'grok', models: AI_MODELS.grok, live: false },
       chatgpt: { provider: 'chatgpt', models: AI_MODELS.chatgpt, live: false },
       claude: { provider: 'claude', models: AI_MODELS.claude, live: false }
@@ -767,11 +765,13 @@ function ConfettiBurst({ token }: { token: number }) {
 function ModelMenu({
   value,
   choices,
-  onChange
+  onChange,
+  onNeedSetup
 }: {
   value: string
   choices: AiModelChoice[]
   onChange: (id: string) => void
+  onNeedSetup?: () => void
 }) {
   const btnRef = useRef<HTMLButtonElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -844,8 +844,19 @@ function ModelMenu({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listId}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (onNeedSetup) {
+            onNeedSetup()
+            return
+          }
+          setOpen((v) => !v)
+        }}
         onKeyDown={(e) => {
+          if (onNeedSetup && (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault()
+            onNeedSetup()
+            return
+          }
           if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
             e.preventDefault()
             if (!open) setOpen(true)
@@ -968,7 +979,8 @@ function Workspace({
   const [splitRatio, setSplitRatio] = useState(settings?.changesSplit ?? 0.55)
   const [detailsH, setDetailsH] = useState(settings?.detailsHeight ?? 260)
   const [commitH, setCommitH] = useState(settings?.commitBoxHeight ?? 168)
-  const provider = (settings?.aiProvider || 'free') as AiProviderId
+  const provider = resolveAiProvider(settings, accounts)
+  const aiConfigured = hasConnectedAi(accounts)
   const model = defaultModelFor(provider, settings)
   const modelChoices = modelOptions(catalogs[provider], model)
 
@@ -1058,7 +1070,18 @@ function Workspace({
     onBusy(false)
   }
 
+  function openAiSettings() {
+    onOverlay({ type: 'settings', tab: 'ai' })
+  }
+
+  function requireAi(): boolean {
+    if (aiConfigured) return true
+    openAiSettings()
+    return false
+  }
+
   async function aiFill(andGo: 'fill' | 'commit' | 'commit-push') {
+    if (!requireAi()) return
     setAiBusy(true)
     await catchErr(async () => {
       if (andGo !== 'fill' && !snap.status.stagedCount) await window.spoon.git.stageAll(path)
@@ -1083,6 +1106,7 @@ function Workspace({
   }
 
   async function runAnalysis() {
+    if (!requireAi()) return
     setSel({ kind: 'changes' })
     setPlanBusy(true)
     await catchErr(async () => {
@@ -1151,7 +1175,7 @@ function Workspace({
       document.removeEventListener('spoon-ai-commit-push', aip)
       document.removeEventListener('spoon-analyze', an)
     }
-  }, [path, msg, amend, snap, provider, model])
+  }, [path, msg, amend, snap, provider, model, aiConfigured])
 
   function pulsePath(hash: string, list: CommitInfo[]) {
     const byHash = new Map(list.map((c) => [c.hash, c]))
@@ -1690,6 +1714,7 @@ function Workspace({
                   <ModelMenu
                     value={model}
                     choices={modelChoices}
+                    onNeedSetup={aiConfigured ? undefined : openAiSettings}
                     onChange={(id) =>
                       onPatchSettings({
                         aiModels: { ...(settings?.aiModels ?? DEFAULT_AI_MODELS), [provider]: id }
@@ -2966,10 +2991,10 @@ function SettingsDialog({
   const [tab, setTab] = useState<PrefsTab>(initialTab ?? lastPrefsTab)
   const [navCollapsed, setNavCollapsed] = useState(lastPrefsNav)
   const [aiNavCollapsed, setAiNavCollapsed] = useState(lastAiNav)
-  const [aiPick, setAiPick] = useState<AiPick>({ type: 'provider', id: settings?.aiProvider ?? 'free' })
+  const [aiPick, setAiPick] = useState<AiPick>({ type: 'provider', id: fallbackAiProvider(settings?.aiProvider) })
   const [version, setVersion] = useState('')
   const [key, setKey] = useState('')
-  const [provider, setProvider] = useState<AiProviderId>(settings?.aiProvider ?? 'free')
+  const [provider, setProvider] = useState<AiProviderId>(fallbackAiProvider(settings?.aiProvider))
   const [acc, setAcc] = useState(accounts)
   const [local, setLocal] = useState<Record<string, { available: boolean; label?: string }>>({})
   const [device, setDevice] = useState<{ userCode: string; url: string } | null>(null)
@@ -3000,8 +3025,8 @@ function SettingsDialog({
   }, [aiNavCollapsed])
   useEffect(() => {
     if (settings?.aiProvider) {
-      setProvider(settings.aiProvider)
-      setAiPick((prev) => (prev.type === 'provider' ? { type: 'provider', id: settings.aiProvider } : prev))
+      setProvider(fallbackAiProvider(settings.aiProvider))
+      setAiPick((prev) => (prev.type === 'provider' ? { type: 'provider', id: fallbackAiProvider(settings.aiProvider) } : prev))
     }
   }, [settings?.aiProvider])
   useEffect(() => {
@@ -3074,7 +3099,6 @@ function SettingsDialog({
 
   function providerStatus(p: AiProviderId) {
     const a = acc.find((x) => x.provider === p)
-    if (p === 'free') return { connected: true, text: 'Ready - no account' }
     if (a?.connected) return { connected: true, text: `Connected${a.label ? ` - ${a.label}` : ''}` }
     return { connected: false, text: 'Not connected' }
   }
@@ -3251,8 +3275,7 @@ function SettingsDialog({
       {tab === 'ai' && (
         <section className="prefs-pane ai-pane" id="prefs-panel-ai">
           <p className="hint">
-            AI message fills the box. AI commit stays local. Free AI needs no account. For a reliable key, add OpenRouter
-            (create an account at openrouter.ai) from the catalog.
+            Connect Grok, ChatGPT, Claude, or a site from the catalog. AI message fills the box. AI commit stays local.
           </p>
           <div className={`ai-layout ${aiNavCollapsed ? 'collapsed' : ''}`}>
             <nav className="rail ai-rail" aria-label="AI providers">
@@ -3343,13 +3366,7 @@ function SettingsDialog({
                       </div>
                     </div>
                     <ModelField provider={p} settings={settings} catalog={catalogs[p]} onSaved={onSaved} />
-                    {p === 'free' && (
-                      <p className="hint">
-                        Anonymous Pollinations GPT-OSS. If a request fails, add OpenRouter and create a free account at
-                        openrouter.ai.
-                      </p>
-                    )}
-                    {p !== 'free' && BUILTIN_AI_IDS.includes(p) && (
+                    {BUILTIN_AI_IDS.includes(p) && (
                       <div className="row-btns">
                         {local[p]?.available && (
                           <div className="ai-local">
@@ -3447,7 +3464,7 @@ function SettingsDialog({
                             className="ghost"
                             onClick={async () => {
                               await window.spoon.ai.removeEndpoint(p)
-                              setAiPick({ type: 'provider', id: 'free' })
+                              setAiPick({ type: 'provider', id: 'grok' })
                               await refresh()
                             }}
                           >
@@ -3537,7 +3554,7 @@ function SettingsDialog({
         <section className="prefs-pane" role="tabpanel" id="prefs-panel-help" aria-labelledby="prefs-tab-help">
           <h3>Spoon{version ? ` ${version}` : ''}</h3>
           <p>Spoon is a Git client for Windows. Scan or clone repositories from Home, then fetch, pull, and commit from the toolbar.</p>
-          <p>AI message only fills the commit box. AI commit stays local unless you push yourself.</p>
+          <p>AI message only fills the commit box. AI commit stays local unless you push yourself. If no provider is connected, those actions open Settings → AI.</p>
           <h3>Guides</h3>
           <div className="row-btns" style={{ marginTop: 4 }}>
             <button
@@ -3630,15 +3647,11 @@ function ModelField({
         }}
       />
       <p className="hint">
-        {provider === 'free'
-          ? catalog?.live
-            ? `${catalog.models.length} anonymous models. No account required. OpenRouter is the backup if this route is down.`
-            : catalog?.error || 'Anonymous GPT-OSS via Pollinations — no account required.'
-          : catalog?.live
-            ? `${catalog.models.length} models from ${name}. The list refreshes on its own.`
-            : catalog?.error
-              ? catalog.error
-              : 'Connect this provider to load every model it offers.'}
+        {catalog?.live
+          ? `${catalog.models.length} models from ${name}. The list refreshes on its own.`
+          : catalog?.error
+            ? catalog.error
+            : 'Connect this provider to load every model it offers.'}
       </p>
     </>
   )
