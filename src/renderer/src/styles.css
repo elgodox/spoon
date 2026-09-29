@@ -20,7 +20,7 @@ html[data-theme='light'] {
   --del-bg: #ffebe9;
   --del-text: #82071e;
   --hunk-bg: #ddf4ff;
-  --toolbar-h: 48px;
+  --toolbar-h: 52px;
   --tab-h: 32px;
   --titlebar-h: 40px;
   --font: "Segoe UI", system-ui, sans-serif;
@@ -70,13 +70,18 @@ button:disabled { cursor: default; opacity: 0.5; }
 .toolbar {
   min-height: var(--toolbar-h);
   height: auto;
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: stretch;
+  align-content: flex-start;
+  gap: 0;
+  padding: 4px 0 2px;
   border-bottom: 1px solid var(--border);
   background: var(--chrome-native, var(--chrome));
   color: var(--text);
   -webkit-app-region: drag;
+  overflow: visible;
 }
 .toolbar button,
 .toolbar .tb-btn,
@@ -92,18 +97,20 @@ button:disabled { cursor: default; opacity: 0.5; }
   -webkit-app-region: drag;
   background: var(--chrome-native, var(--chrome));
 }
-.tb-group { display: flex; align-items: stretch; flex: 0 0 auto; }
+.tb-group { display: flex; align-items: stretch; flex: 0 0 auto; min-height: calc(var(--toolbar-h) - 6px); }
 .tb-group.center { flex: 1 1 180px; min-width: 140px; justify-content: center; border-left: 1px solid var(--border); border-right: 1px solid var(--border); overflow: hidden; }
 .tb-group.right { justify-content: flex-end; margin-left: auto; }
 .tb-btn {
   flex: 0 0 auto;
-  padding: 6px 10px 4px;
+  position: relative;
+  padding: 6px 10px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   background: transparent; border: 0; color: var(--text);
+  overflow: visible;
 }
 .tb-btn:hover { background: color-mix(in srgb, var(--sel) 78%, transparent); }
-.tb-btn .ico { width: 18px; height: 18px; opacity: 0.85; }
-.tb-btn span { font-size: 11px; white-space: nowrap; }
+.tb-btn .ico { width: 18px; height: 18px; opacity: 0.85; flex-shrink: 0; overflow: visible; }
+.tb-btn span { font-size: 11px; white-space: nowrap; line-height: 1.2; }
 .tb-btn.active { background: var(--sel); }
 .branch-chip {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -1017,7 +1024,17 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .counter { color: var(--muted); margin-left: 4px; }
 .hint { color: var(--muted); font-size: 11px; }
 .row-btns { display: flex; gap: 6px; flex-wrap: wrap; }
-.icon-svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.icon-svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .busy { opacity: 0.65; pointer-events: none; }
 .confetti { position: fixed; inset: 0; pointer-events: none; z-index: 200; overflow: hidden; }
 .confetti i {
@@ -1903,14 +1920,13 @@ html[data-pack='spacex'] .tb-btn .icon-svg {
 }
 html[data-pack='spacex'] .tb-btn:hover:not(:disabled) {
   background: color-mix(in srgb, #fff 6%, transparent);
-  transform: translateY(-1px);
 }
 html[data-pack='spacex'] .tb-btn:hover:not(:disabled) .ico,
 html[data-pack='spacex'] .tb-btn:hover:not(:disabled) .icon-svg {
-  transform: scale(1.08);
+  transform: scale(1.06);
 }
 html[data-pack='spacex'] .tb-btn:active:not(:disabled) {
-  transform: translateY(0) scale(0.97);
+  transform: scale(0.97);
 }
 html[data-pack='spacex'] .tb-btn.brand {
   color: #fff;
@@ -2040,6 +2056,27 @@ html[data-pack='spacex'] .diff-line.del { background: color-mix(in srgb, #e81828
 html[data-pack='colored'] .primary.ai {
   background: color-mix(in srgb, var(--accent) 88%, #000);
   border-color: color-mix(in srgb, var(--accent) 70%, #000);
+}
+
+@media (max-width: 1200px) {
+  .tb-btn {
+    padding: 8px 9px;
+    gap: 0;
+  }
+  .tb-btn span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+  .tb-group {
+    min-height: var(--toolbar-h);
+  }
 }
 
 @media (max-width: 900px) {
