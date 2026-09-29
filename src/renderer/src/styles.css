@@ -332,22 +332,34 @@ button:disabled { cursor: default; opacity: 0.5; }
 }
 .commit-list { flex: 1 1 auto; overflow: auto; min-height: 0; }
 @keyframes lane-run {
-  0% { stroke-dasharray: 3 16; stroke-dashoffset: 24; stroke-width: 4; }
-  100% { stroke-dasharray: 40 0; stroke-dashoffset: 0; stroke-width: 2.5; }
+  0% { stroke-dasharray: 2 14; stroke-dashoffset: 20; stroke-width: 2.75; }
+  100% { stroke-dasharray: 36 0; stroke-dashoffset: 0; stroke-width: 1.5; }
 }
 @keyframes dot-pop {
-  0% { transform: scale(0.65); }
-  45% { transform: scale(1.4); }
+  0% { transform: scale(0.7); }
+  45% { transform: scale(1.28); }
   100% { transform: scale(1); }
 }
 .lane-pulse {
-  animation: lane-run 0.9s ease-out 1;
-  filter: drop-shadow(0 0 3px currentColor);
+  animation: lane-run 0.85s ease-out 1;
+  filter: drop-shadow(0 0 2.5px currentColor);
 }
 .dot-pulse {
   transform-origin: center;
   transform-box: fill-box;
-  animation: dot-pop 0.9s ease-out 1;
+  animation: dot-pop 0.85s ease-out 1;
+}
+.commit-graph {
+  display: block;
+  overflow: visible;
+  flex-shrink: 0;
+  --graph-cutout: var(--bg);
+}
+.commit-row:hover .commit-graph {
+  --graph-cutout: color-mix(in srgb, var(--sel) 88%, var(--bg));
+}
+.commit-row.sel .commit-graph {
+  --graph-cutout: var(--sel-strong);
 }
 .commit-row {
   display: grid;

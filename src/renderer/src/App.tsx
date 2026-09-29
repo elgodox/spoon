@@ -83,6 +83,7 @@ import {
   initials,
   joinRepoPath,
   laneColor,
+  laneGlow,
   openMenu,
   parentDir
 } from './lib'
@@ -2638,62 +2639,74 @@ const CommitRow = memo(function CommitRow({
   onContext: (e: MouseEvent) => void
 }) {
   const laneCount = Math.min(c.maxLane, 12) + 1
-  const w = Math.max(16, laneCount * 14)
-  const x = (n: number) => 8 + Math.min(n, 12) * 14
+  const w = Math.max(18, laneCount * 14)
+  const x = (n: number) => 9 + Math.min(n, 12) * 14
   const ins = c.lanesIn?.length ? c.lanesIn : [c.lane]
   const outs = c.lanesOut?.length ? c.lanesOut : [c.lane]
   const lanes = new Set([...ins, ...outs, c.lane, ...(c.parentLanes ?? []), ...(c.mergeLanes ?? [])])
+  const curve = (from: number, to: number) => `M${x(from)} 11 C ${x(from)} 19, ${x(to)} 3, ${x(to)} 22`
   return (
     <div className={`commit-row ${selected ? 'sel' : ''}`} onClick={onClick} onContextMenu={onContext} style={{ ['--graph-w' as string]: `${w}px` }}>
-      <svg width={w} height={22} key={pulse ? pulseKey : 'g'}>
+      <svg className="commit-graph" width={w} height={22} key={pulse ? pulseKey : 'g'}>
         {[...lanes].filter((n) => n <= 12).map((n) => {
           const y1 = ins.includes(n) ? 0 : 11
           const y2 = outs.includes(n) ? 22 : 11
           if (y1 === y2) return null
+          const active = pulse && n === c.lane
           return (
-            <line
-              key={`v${n}`}
-              x1={x(n)}
-              y1={y1}
-              x2={x(n)}
-              y2={y2}
-              stroke={laneColor(n)}
-              strokeWidth={pulse && n === c.lane ? 3 : 2}
-              className={pulse && n === c.lane ? 'lane-pulse' : undefined}
-            />
+            <g key={`v${n}`}>
+              <line x1={x(n)} y1={y1} x2={x(n)} y2={y2} stroke={laneGlow(n, 0.18)} strokeWidth={3.5} />
+              <line
+                x1={x(n)}
+                y1={y1}
+                x2={x(n)}
+                y2={y2}
+                stroke={laneColor(n)}
+                strokeWidth={active ? 2.25 : 1.5}
+                className={active ? 'lane-pulse' : undefined}
+              />
+            </g>
           )
         })}
         {(c.parentLanes ?? [])
           .filter((pl) => pl !== c.lane && pl <= 12)
           .map((pl) => (
-            <path
-              key={`p${pl}`}
-              d={`M${x(c.lane)} 11 C ${x(c.lane)} 20, ${x(pl)} 2, ${x(pl)} 22`}
-              fill="none"
-              stroke={laneColor(pl)}
-              strokeWidth="2"
-              className={pulse ? 'lane-pulse' : undefined}
-            />
+            <g key={`p${pl}`}>
+              <path d={curve(c.lane, pl)} fill="none" stroke={laneGlow(pl, 0.18)} strokeWidth={3.5} strokeLinecap="round" />
+              <path
+                d={curve(c.lane, pl)}
+                fill="none"
+                stroke={laneColor(pl)}
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                className={pulse ? 'lane-pulse' : undefined}
+              />
+            </g>
           ))}
         {(c.mergeLanes ?? []).slice(0, 4).filter((ml) => ml <= 12).map((ml) => (
-          <path
-            key={`m${ml}`}
-            d={`M${x(c.lane)} 11 C ${x(c.lane)} 20, ${x(ml)} 2, ${x(ml)} 22`}
-            fill="none"
-            stroke={laneColor(ml)}
-            strokeWidth="2"
-            className={pulse ? 'lane-pulse' : undefined}
-          />
+          <g key={`m${ml}`}>
+            <path d={curve(c.lane, ml)} fill="none" stroke={laneGlow(ml, 0.18)} strokeWidth={3.5} strokeLinecap="round" />
+            <path
+              d={curve(c.lane, ml)}
+              fill="none"
+              stroke={laneColor(ml)}
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              className={pulse ? 'lane-pulse' : undefined}
+            />
+          </g>
         ))}
+        <circle cx={x(c.lane)} cy={11} r={5.5} fill={laneGlow(c.lane, 0.28)} />
         <circle
           cx={x(c.lane)}
           cy={11}
-          r={4}
+          r={3.25}
           fill={laneColor(c.lane)}
-          stroke="#fff"
-          strokeWidth="1"
+          stroke="var(--graph-cutout)"
+          strokeWidth="1.75"
           className={pulse ? 'dot-pulse' : undefined}
         />
+        <circle cx={x(c.lane)} cy={11} r={1.15} fill="var(--graph-cutout)" opacity={0.55} />
       </svg>
       <div className="msg">
         {c.refs

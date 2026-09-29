@@ -12,10 +12,20 @@ export function openMenu(items: object[], onPick: (id: string) => void) {
   })
 }
 
-const LANE_COLORS = ['#e08a2a', '#3b82c4', '#3aaa4a', '#c44ab0', '#e05656', '#2aa8a8', '#8a6ad4', '#c48a2a']
+const LANE_COLORS = ['#f0a03a', '#4b9de0', '#3fbf5a', '#d65cc4', '#ef5f5f', '#2bbbbb', '#9a78e8', '#d9a03a']
 
 export function laneColor(lane: number): string {
   return LANE_COLORS[Math.abs(lane) % LANE_COLORS.length]
+}
+
+/** Soft underglow for graph strokes (hex + alpha). */
+export function laneGlow(lane: number, alpha = 0.22): string {
+  const hex = laneColor(lane)
+  const n = parseInt(hex.slice(1), 16)
+  const r = (n >> 16) & 255
+  const g = (n >> 8) & 255
+  const b = n & 255
+  return `rgba(${r},${g},${b},${alpha})`
 }
 
 export function initials(name: string): string {
