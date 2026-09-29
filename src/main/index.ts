@@ -8,7 +8,6 @@ import {
   nativeTheme,
   clipboard
 } from 'electron'
-import { spawn, execFile } from 'node:child_process'
 import { existsSync, mkdirSync, watch as fsWatch, writeFileSync, type FSWatcher } from 'node:fs'
 import { release } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -32,6 +31,7 @@ import * as store from './store'
 import * as oauth from './oauth'
 import * as updater from './updater'
 import { analyzeRepository, analyzeWorkspaces, generateCommitMessage } from './ai'
+import * as launchers from './launchers'
 import { listProviderModels } from './model-catalog'
 
 app.commandLine.appendSwitch('disable-gpu-sandbox')
@@ -262,36 +262,8 @@ async function bulkOne(action: BulkAction, path: string, name: string): Promise<
   return { path, name, ok: true, message: `Pushed ${o.ahead} commit(s)` }
 }
 
-function which(cmd: string): Promise<boolean> {
-  return new Promise((r) => execFile('where', [cmd], { windowsHide: true }, (err) => r(!err)))
-}
-
 async function openIn(path: string, target: 'editor' | 'terminal' | 'explorer'): Promise<string> {
-  if (!existsSync(path)) throw new Error('That folder no longer exists.')
-  const detached = { detached: true, stdio: 'ignore' as const, windowsHide: true, cwd: path }
-  if (target === 'explorer') {
-    await shell.openPath(path)
-    return 'Explorer'
-  }
-  if (target === 'terminal') {
-    if (await which('wt')) {
-      spawn('wt', ['-d', path], detached).unref()
-      return 'Windows Terminal'
-    }
-    const ps = (await which('pwsh')) ? 'pwsh' : 'powershell'
-    spawn(ps, ['-NoExit', '-NoLogo'], { ...detached, windowsHide: false }).unref()
-    return ps
-  }
-  const preferred = store.getSettings().editor ?? 'code'
-  const editors = preferred === 'explorer' ? [] : [preferred, preferred === 'code' ? 'cursor' : 'code']
-  for (const cmd of editors) {
-    if (await which(cmd)) {
-      spawn('cmd', ['/c', cmd, '.'], detached).unref()
-      return cmd === 'code' ? 'VS Code' : 'Cursor'
-    }
-  }
-  await shell.openPath(path)
-  return 'Explorer'
+  return launchers.openInLegacy(path, target)
 }
 
 function scheduleFetch(): void {
@@ -437,7 +409,7 @@ function buildMenu(): void {
         { label: 'Stash', click: () => sendMenu('stash') },
         { type: 'separator' },
         { label: 'Health Check…', accelerator: 'Ctrl+Shift+H', click: () => sendMenu('health') },
-        { label: 'Open in Editor', accelerator: 'Ctrl+Shift+E', click: () => sendMenu('open-editor') },
+        { label: 'Open with Default', accelerator: 'Ctrl+Shift+E', click: () => sendMenu('open-editor') },
         { label: 'Open in Terminal', accelerator: 'Ctrl+`', click: () => sendMenu('open-terminal') }
       ]
     },
@@ -480,6 +452,8 @@ function registerIpc(): void {
     return settings
   })
   ipcMain.handle('app:recent', () => store.getRecent())
+  ipcMain.handle('app:session', () => store.getSession())
+  ipcMain.handle('app:saveSession', (_e, session) => store.saveSession(session))
   ipcMain.handle('app:workspaces', () => store.getWorkspaces())
   ipcMain.handle(
     'app:saveWorkspace',
@@ -505,6 +479,15 @@ function registerIpc(): void {
     node: process.versions.node
   }))
   ipcMain.handle('app:openIn', (_e, path: string, target: 'editor' | 'terminal' | 'explorer') => openIn(path, target))
+  ipcMain.handle('app:launchers', (_e, force?: boolean) => launchers.listLaunchers(!!force))
+  ipcMain.handle('app:openWith', (_e, path: string, launcherId?: string) => launchers.openWith(path, launcherId))
+  ipcMain.handle('app:setDefaultLauncher', (_e, id: string) => {
+    const next = store.patchSettings({
+      defaultLauncher: id,
+      editor: id === 'cursor' ? 'cursor' : id === 'explorer' ? 'explorer' : id === 'code' ? 'code' : store.getSettings().editor
+    })
+    return { settings: next, defaultId: id }
+  })
   ipcMain.handle('app:update', () => updater.current())
   ipcMain.handle('app:checkUpdate', () => updater.check())
   ipcMain.handle('app:installUpdate', () => updater.install())

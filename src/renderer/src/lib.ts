@@ -12,6 +12,34 @@ export function openMenu(items: object[], onPick: (id: string) => void) {
   })
 }
 
+export function openWithMenuItems(
+  launchers: { id: string; label: string; kind: string; available: boolean }[],
+  opts?: { defaultId?: string; prefix?: string }
+): object[] {
+  const prefix = opts?.prefix ?? 'open:'
+  const kindOrder = ['ide', 'agent', 'cli', 'system'] as const
+  const kindLabel: Record<string, string> = {
+    ide: 'IDE',
+    agent: 'Agent',
+    cli: 'CLI',
+    system: 'System'
+  }
+  const available = launchers.filter((item) => item.available)
+  const items: object[] = []
+  for (const kind of kindOrder) {
+    const rows = available.filter((item) => item.kind === kind)
+    if (!rows.length) continue
+    items.push({
+      label: kindLabel[kind],
+      submenu: rows.map((item) => ({
+        id: `${prefix}${item.id}`,
+        label: item.id === opts?.defaultId ? `${item.label} (default)` : item.label
+      }))
+    })
+  }
+  return items
+}
+
 const LANE_COLORS = ['#f0a03a', '#4b9de0', '#3fbf5a', '#d65cc4', '#ef5f5f', '#2bbbbb', '#9a78e8', '#d9a03a']
 
 export function laneColor(lane: number): string {

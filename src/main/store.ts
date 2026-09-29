@@ -2,7 +2,8 @@ import { app, nativeTheme, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEFAULT_AI_MODELS, fallbackAiProvider } from '../shared/models'
-import type { AiProviderId, RepoSummary, RepoWorkspace, Settings, ThemeMode } from '../shared/types'
+import { launcherFromEditor } from '../shared/launchers'
+import type { AiProviderId, AppSession, RepoSummary, RepoWorkspace, SessionTab, Settings, ThemeMode } from '../shared/types'
 import {
   sanitizeAccentCustom,
   sanitizeAccentId,
@@ -28,6 +29,7 @@ interface StoreFile {
   recent: RepoSummary[]
   folders: { name: string; repos: string[] }[]
   workspaces: RepoWorkspace[]
+  session: AppSession
   creds: Record<string, string>
 }
 
@@ -50,6 +52,7 @@ const defaults: Settings = {
   pinned: [],
   onboarded: false,
   editor: 'code',
+  defaultLauncher: 'cursor',
   aiProvider: 'grok',
   aiModels: { ...DEFAULT_AI_MODELS },
   aiEndpoints: [],
@@ -111,7 +114,11 @@ function load(): StoreFile {
       recent: parsed.recent ?? [],
       folders: parsed.folders ?? [],
       workspaces: sanitizeWorkspaces(parsed.workspaces),
+      session: sanitizeSession((parsed as { session?: unknown }).session),
       creds: parsed.creds ?? {}
+    }
+    if (!cache.settings.defaultLauncher) {
+      cache.settings.defaultLauncher = launcherFromEditor(cache.settings.editor)
     }
     const migratedFree =
       (parsed.settings as Partial<Settings> | undefined)?.aiProvider === 'free' || Boolean(parsed.settings?.aiModels?.free)
@@ -123,7 +130,7 @@ function load(): StoreFile {
       }
     }
   } catch {
-    cache = { settings: { ...defaults }, recent: [], folders: [], workspaces: [], creds: {} }
+    cache = { settings: { ...defaults }, recent: [], folders: [], workspaces: [], session: emptySession(), creds: {} }
   }
   return cache
 }
@@ -317,4 +324,59 @@ export function pushRecentMessage(message: string): string[] {
   ].slice(0, 30)
   save(data)
   return data.settings.recentMessages
+}
+
+function emptySession(): AppSession {
+  return { tabs: [], activePath: null, collapsedGroups: {} }
+}
+
+function sanitizeSession(raw: unknown): AppSession {
+  if (!raw || typeof raw !== 'object') return emptySession()
+  const row = raw as Partial<AppSession>
+  const tabs: SessionTab[] = []
+  const seen = new Set<string>()
+  for (const item of Array.isArray(row.tabs) ? row.tabs : []) {
+    if (!item || typeof item !== 'object') continue
+    const tab = item as Partial<SessionTab>
+    if (typeof tab.path !== 'string' || !tab.path.trim()) continue
+    const path = tab.path.trim()
+    const key = path.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    tabs.push({
+      path,
+      name: typeof tab.name === 'string' && tab.name.trim() ? tab.name.trim() : path.split(/[\\/]/).pop() || path,
+      workspaceId: typeof tab.workspaceId === 'string' && tab.workspaceId.trim() ? tab.workspaceId.trim() : undefined,
+      color: typeof tab.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(tab.color) ? tab.color.toLowerCase() : undefined
+    })
+    if (tabs.length >= 40) break
+  }
+  const collapsedGroups: Record<string, boolean> = {}
+  if (row.collapsedGroups && typeof row.collapsedGroups === 'object') {
+    for (const [key, value] of Object.entries(row.collapsedGroups)) {
+      if (value) collapsedGroups[key] = true
+    }
+  }
+  const activePath =
+    typeof row.activePath === 'string' && row.activePath.trim()
+      ? row.activePath.trim()
+      : row.activePath === null
+        ? null
+        : undefined
+  return { tabs, activePath: activePath ?? null, collapsedGroups }
+}
+
+export function getSession(): AppSession {
+  const session = sanitizeSession(load().session)
+  return {
+    ...session,
+    tabs: session.tabs.filter((tab) => existsSync(tab.path))
+  }
+}
+
+export function saveSession(input: AppSession): AppSession {
+  const data = load()
+  data.session = sanitizeSession(input)
+  save(data)
+  return data.session
 }

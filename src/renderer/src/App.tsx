@@ -27,11 +27,14 @@ import type {
   StatusEntry,
   TagInfo,
   UpdateState,
+  AppSession,
   WorkspaceAnalysis,
   WorkspaceSuggestion
 } from '../../shared/types'
 import { classifyMedia, formatBytes } from '../../shared/media'
 import { clusterGrouped, WORKSPACE_COLORS, workspaceColor } from '../../shared/workspaces'
+import type { LauncherInfo } from '../../shared/launchers'
+import { groupLaunchers, LAUNCHER_KIND_LABEL } from '../../shared/launchers'
 import { AI_SITE_CATALOG, customProviderId } from '../../shared/ai-catalog'
 import { ProviderIcon } from './ai-logos'
 import { AI_MODELS, BUILTIN_AI_IDS, DEFAULT_AI_MODELS, defaultModelFor, fallbackAiProvider, hasConnectedAi, listedProviderIds, PAID_AI_PROVIDERS, providerLabel, resolveAiProvider } from '../../shared/models'
@@ -89,15 +92,17 @@ import {
   laneColor,
   laneGlow,
   openMenu,
+  openWithMenuItems,
   parentDir,
   parseReflogSubject
 } from './lib'
 
-type PrefsTab = 'look' | 'git' | 'ai' | 'help'
+type PrefsTab = 'look' | 'git' | 'open' | 'ai' | 'help'
 type AiPick = { type: 'provider'; id: AiProviderId } | { type: 'add'; id: string } | { type: 'custom' }
 const PREFS_TABS: { id: PrefsTab; label: string; Icon: () => ReactNode }[] = [
   { id: 'look', label: 'Appearance', Icon: IcoTheme },
   { id: 'git', label: 'Git', Icon: IcoBranch },
+  { id: 'open', label: 'Open with', Icon: IcoOpen },
   { id: 'ai', label: 'AI', Icon: IcoAi },
   { id: 'help', label: 'Help', Icon: IcoHelp }
 ]
@@ -200,6 +205,15 @@ export function App() {
   const [drafts, setDrafts] = useState<RepoWorkspace[]>([])
   const [manageWs, setManageWs] = useState(false)
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
+  const [groupMenu, setGroupMenu] = useState<{
+    key: string
+    workspaceId?: string
+    name?: string
+    x: number
+    y: number
+    tabIds: string[]
+  } | null>(null)
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const [snaps, setSnaps] = useState<Record<string, Snapshot>>({})
   const [busy, setBusy] = useState(false)
   const [overlay, setOverlay] = useState<Overlay>(null)
@@ -213,6 +227,11 @@ export function App() {
   const active = tabs.find((t) => t.id === activeId) || tabs[0]
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
+  const activeIdRef = useRef(activeId)
+  activeIdRef.current = activeId
+  const collapsedGroupsRef = useRef(collapsedGroups)
+  collapsedGroupsRef.current = collapsedGroups
+  const sessionReadyRef = useRef(false)
 
   const applyAppearance = useCallback((s: Settings) => {
     const pack = s.themePack || 'classic'
@@ -393,6 +412,80 @@ export function App() {
     setBusy(false)
   }, [])
 
+  const restoreOpenSession = useCallback(async (session: AppSession) => {
+    const rows = session.tabs ?? []
+    if (!rows.length) return
+    setBusy(true)
+    const opened: {
+      id: string
+      path: string
+      name: string
+      workspaceId?: string
+      color?: string
+      snap: Snapshot
+    }[] = []
+    for (const row of rows) {
+      try {
+        const snap = (await window.spoon.git.open(row.path)) as Snapshot
+        opened.push({
+          id: `r-${Date.now().toString(36)}-${opened.length}`,
+          path: row.path,
+          name: snap.status.name || row.name,
+          workspaceId: row.workspaceId,
+          color: row.color,
+          snap
+        })
+      } catch {
+        /* skip missing or unreadable repos */
+      }
+    }
+    if (!opened.length) {
+      setBusy(false)
+      return
+    }
+    setSnaps((map) => {
+      const next = { ...map }
+      for (const row of opened) next[row.path] = row.snap
+      return next
+    })
+    const nextTabs = clusterGrouped(
+      opened.map((row) => ({
+        id: row.id,
+        kind: 'repo' as const,
+        path: row.path,
+        name: row.name,
+        workspaceId: row.workspaceId,
+        color: row.color
+      }))
+    )
+    setTabs(nextTabs)
+    const activePath = session.activePath
+    const activeTab = activePath
+      ? nextTabs.find((tab) => tab.path?.toLowerCase() === activePath.toLowerCase())
+      : undefined
+    setActiveId(activeTab?.id ?? nextTabs[0].id)
+    if (session.collapsedGroups) setCollapsedGroups(session.collapsedGroups)
+    setRecent(await window.spoon.app.recent())
+    setBusy(false)
+  }, [])
+
+  function sessionSnapshot(): AppSession {
+    const current = tabsRef.current
+    const activeTab = current.find((tab) => tab.id === activeIdRef.current)
+    return {
+      tabs: current
+        .filter((tab) => tab.kind === 'repo' && tab.path)
+        .map((tab) => ({
+          path: tab.path!,
+          name: tab.name,
+          workspaceId: tab.workspaceId,
+          color: tab.color
+        })),
+      activePath: activeTab?.kind === 'repo' ? activeTab.path ?? null : null,
+      collapsedGroups: collapsedGroupsRef.current
+    }
+  }
+
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const runRemoteRef = useRef(runRemote)
   runRemoteRef.current = runRemote
@@ -418,7 +511,43 @@ export function App() {
   )
 
   useEffect(() => {
-    void refreshSettings()
+    let cancelled = false
+    void (async () => {
+      await refreshSettings()
+      if (cancelled) return
+      try {
+        const session = (await window.spoon.app.session()) as AppSession
+        if (!cancelled) await restoreOpenSession(session)
+      } finally {
+        if (!cancelled) sessionReadyRef.current = true
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [refreshSettings, restoreOpenSession])
+
+  useEffect(() => {
+    if (!sessionReadyRef.current) return
+    const timer = setTimeout(() => {
+      void window.spoon.app.saveSession(sessionSnapshot())
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [tabs, activeId, collapsedGroups])
+
+  useEffect(() => {
+    const flush = () => {
+      if (!sessionReadyRef.current) return
+      void window.spoon.app.saveSession(sessionSnapshot())
+    }
+    window.addEventListener('beforeunload', flush)
+    return () => {
+      window.removeEventListener('beforeunload', flush)
+      flush()
+    }
+  }, [])
+
+  useEffect(() => {
     const offs = [
       window.spoon.app.on('menu', (action) => {
         const a = String(action)
@@ -444,8 +573,8 @@ export function App() {
           if (mgr) setActiveId(mgr.id)
           else openManager()
         }
-        if (a === 'open-editor' && active.path) void window.spoon.app.openIn(active.path, 'editor')
-        if (a === 'open-terminal' && active.path) void window.spoon.app.openIn(active.path, 'terminal')
+        if (a === 'open-editor' && active.path) void window.spoon.app.openWith(active.path)
+        if (a === 'open-terminal' && active.path) void window.spoon.app.openWith(active.path, 'terminal')
         if (a === 'fetch') void runRemoteRef.current('fetch')
         if (a === 'pull') void runRemoteRef.current('pull')
         if (a === 'push') void runRemoteRef.current('push')
@@ -528,18 +657,36 @@ export function App() {
   }
 
   function closeTab(id: string) {
+    closeTabs([id])
+  }
+
+  function closeTabs(ids: string[]) {
+    const idSet = new Set(ids)
+    if (!idSet.size) return
     setTabs((ts) => {
-      const t = ts.find((x) => x.id === id)
-      if (t?.path) void window.spoon.git.close(t.path)
-      const next = ts.filter((x) => x.id !== id)
+      const firstClosed = ts.findIndex((tab) => idSet.has(tab.id))
+      for (const tab of ts) {
+        if (idSet.has(tab.id) && tab.path) void window.spoon.git.close(tab.path)
+      }
+      const next = ts.filter((tab) => !idSet.has(tab.id))
       if (!next.length) {
         const nid = 'mgr'
         setActiveId(nid)
         return [{ id: nid, kind: 'manager', name: 'New Tab' }]
       }
-      if (id === activeId) setActiveId(next[next.length - 1].id)
+      if (idSet.has(activeId)) {
+        const before = firstClosed > 0 ? ts[firstClosed - 1] : undefined
+        const pick =
+          before && !idSet.has(before.id) ? before : next[Math.min(Math.max(firstClosed, 0), next.length - 1)]
+        setActiveId(pick.id)
+      }
       return clusterGrouped(next)
     })
+  }
+
+  function closeWorkspaceTabs(workspaceId: string) {
+    const ids = tabsRef.current.filter((tab) => tab.workspaceId === workspaceId).map((tab) => tab.id)
+    closeTabs(ids)
   }
 
   function openSelection(paths: string[]) {
@@ -785,10 +932,23 @@ export function App() {
             className="tb-btn"
             data-ico="terminal"
             disabled={!active.path}
-            onClick={() => active.path && window.spoon.app.showItem(active.path)}
+            title="Open with default IDE, agent, or CLI"
+            onClick={() => {
+              if (!active.path) return
+              void window.spoon.app.openWith(active.path)
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              if (!active.path) return
+              void window.spoon.app.launchers().then((result: { launchers: LauncherInfo[]; defaultId: string }) => {
+                openMenu(openWithMenuItems(result.launchers, { defaultId: result.defaultId }), (id) => {
+                  if (id.startsWith('open:') && active.path) void window.spoon.app.openWith(active.path, id.slice(5))
+                })
+              })
+            }}
           >
             <IcoOpen />
-            <span>Open in</span>
+            <span>Open with</span>
           </button>
           <button className="tb-btn" data-ico="health" disabled={!active.path} onClick={() => setOverlay({ type: 'health' })}>
             <IcoHealth />
@@ -834,17 +994,43 @@ export function App() {
             />
           ))
           if (!grouped) return <Fragment key={head.id}>{chips}</Fragment>
+          const groupKey = head.workspaceId || `color-${head.color}`
+          const groupTitle = ws?.name || 'Grouped by color'
+          const collapsed = !!collapsedGroups[groupKey]
+          const hasActive = run.some((tab) => tab.id === activeId)
           return (
             <div
-              key={head.workspaceId || `color-${head.color}`}
-              className="tab-group"
+              key={groupKey}
+              className={`tab-group ${collapsed ? 'collapsed' : ''} ${hasActive ? 'has-active' : ''}`}
               style={{ ['--group' as string]: color }}
             >
-              <span className="tab-group-label" title={ws?.name || 'Grouped by color'}>
+              <button
+                type="button"
+                className="tab-group-label"
+                title={collapsed ? `Expand “${groupTitle}”` : `Collapse “${groupTitle}”`}
+                aria-expanded={!collapsed}
+                aria-label={groupTitle}
+                onClick={() =>
+                  setCollapsedGroups((prev) => ({ ...prev, [groupKey]: !prev[groupKey] }))
+                }
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  setTabMenu(null)
+                  setGroupMenu({
+                    key: groupKey,
+                    workspaceId: head.workspaceId,
+                    name: ws?.name,
+                    x: event.clientX,
+                    y: event.clientY,
+                    tabIds: run.map((tab) => tab.id)
+                  })
+                }}
+              >
                 <i />
-                {ws?.name}
-              </span>
-              {chips}
+                <span className="tab-group-name">{ws?.name || 'Group'}</span>
+                {collapsed ? <span className="tab-group-count">{run.length}</span> : null}
+              </button>
+              {!collapsed ? chips : null}
             </div>
           )
         })}
@@ -931,9 +1117,28 @@ export function App() {
           x={tabMenu.x}
           y={tabMenu.y}
           workspaces={workspaces}
+          canCloseWorkspace={!!menuTab.workspaceId}
           onClose={() => setTabMenu(null)}
           onColor={(color) => paintTab(menuTab.id, color)}
           onWorkspace={(ws) => void moveTabToWorkspace(menuTab, ws)}
+          onCloseWorkspace={() => {
+            if (!menuTab.workspaceId) return
+            setTabMenu(null)
+            closeWorkspaceTabs(menuTab.workspaceId)
+          }}
+        />
+      )}
+      {groupMenu && (
+        <WorkspaceGroupMenu
+          x={groupMenu.x}
+          y={groupMenu.y}
+          label={groupMenu.name}
+          onClose={() => setGroupMenu(null)}
+          onCloseGroup={() => {
+            const ids = groupMenu.tabIds
+            setGroupMenu(null)
+            closeTabs(ids)
+          }}
         />
       )}
       {overlay && (
@@ -3475,6 +3680,81 @@ function RebaseDialog({
   )
 }
 
+function LauncherPrefs({
+  settings,
+  onPersist
+}: {
+  settings: Settings | null
+  onPersist: (patch: Partial<Settings>) => void
+}) {
+  const [launchers, setLaunchers] = useState<LauncherInfo[]>([])
+  const [defaultId, setDefaultId] = useState(settings?.defaultLauncher || 'cursor')
+  const [busy, setBusy] = useState(false)
+
+  const reload = useCallback(async (force = false) => {
+    setBusy(true)
+    try {
+      const result = (await window.spoon.app.launchers(force)) as { launchers: LauncherInfo[]; defaultId: string }
+      setLaunchers(result.launchers)
+      setDefaultId(result.defaultId)
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void reload()
+  }, [reload, settings?.defaultLauncher])
+
+  async function pickDefault(id: string) {
+    setDefaultId(id)
+    const result = (await window.spoon.app.setDefaultLauncher(id)) as { settings: Settings; defaultId: string }
+    onPersist({
+      defaultLauncher: result.defaultId,
+      editor: result.settings.editor
+    })
+    setDefaultId(result.defaultId)
+  }
+
+  const groups = groupLaunchers(launchers)
+
+  return (
+    <div className="launcher-prefs">
+      <div className="launcher-prefs-head">
+        <span className="hint">
+          Default: <strong>{launchers.find((item) => item.id === defaultId)?.label || defaultId}</strong>
+        </span>
+        <button type="button" className="ghost tiny" disabled={busy} onClick={() => void reload(true)}>
+          {busy ? 'Scanning…' : 'Rescan PATH'}
+        </button>
+      </div>
+      {groups.map((group) => (
+        <div key={group.kind} className="launcher-group">
+          <div className="launcher-kind">{LAUNCHER_KIND_LABEL[group.kind]}</div>
+          <ul className="launcher-list">
+            {group.items.map((item) => (
+              <li key={item.id} className={item.available ? '' : 'off'}>
+                <div className="launcher-copy">
+                  <strong>{item.label}</strong>
+                  <div className="hint">{item.available ? item.blurb : `Not found on PATH (${item.bins.join(' / ') || 'system'})`}</div>
+                </div>
+                <button
+                  type="button"
+                  className={`ghost ${defaultId === item.id ? 'on' : ''}`}
+                  disabled={!item.available}
+                  onClick={() => void pickDefault(item.id)}
+                >
+                  {defaultId === item.id ? 'Default' : 'Make default'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function SettingsDialog({
   accounts,
   settings,
@@ -3846,22 +4126,17 @@ function SettingsDialog({
             Download updates automatically
           </label>
           <p className="hint">Spoon checks GitHub releases a few seconds after launch, then every four hours.</p>
-          <h3>Editor</h3>
-          <div className="seg">
-            {([
-              ['code', 'VS Code'],
-              ['cursor', 'Cursor'],
-              ['explorer', 'Explorer']
-            ] as const).map(([id, label]) => (
-              <button
-                key={id}
-                className={(settings?.editor ?? 'code') === id ? 'on' : ''}
-                onClick={() => void persist({ editor: id })}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+        </section>
+      )}
+
+      {tab === 'open' && (
+        <section className="prefs-pane" role="tabpanel" id="prefs-panel-open" aria-labelledby="prefs-tab-open">
+          <h3>Open with</h3>
+          <p className="hint">
+            Detected IDEs, agent apps, and coding CLIs on PATH. Pick a default for the quick button; use the menu to choose
+            another.
+          </p>
+          <LauncherPrefs settings={settings} onPersist={(patch) => void persist(patch)} />
         </section>
       )}
 
@@ -4346,20 +4621,52 @@ function TabChip({
   )
 }
 
+function WorkspaceGroupMenu({
+  x,
+  y,
+  label,
+  onClose,
+  onCloseGroup
+}: {
+  x: number
+  y: number
+  label?: string
+  onClose: () => void
+  onCloseGroup: () => void
+}) {
+  return (
+    <div className="tab-menu-back" onMouseDown={onClose}>
+      <div
+        className="tab-menu"
+        style={{ left: Math.max(8, Math.min(x, window.innerWidth - 220)), top: Math.max(8, Math.min(y, window.innerHeight - 120)) }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <button type="button" className="tab-menu-item danger" onClick={onCloseGroup}>
+          {label ? `Close workspace “${label}”` : 'Close group'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function TabGroupMenu({
   x,
   y,
   workspaces,
+  canCloseWorkspace,
   onClose,
   onColor,
-  onWorkspace
+  onWorkspace,
+  onCloseWorkspace
 }: {
   x: number
   y: number
   workspaces: RepoWorkspace[]
+  canCloseWorkspace?: boolean
   onClose: () => void
   onColor: (color: string | null) => void
   onWorkspace: (workspace: RepoWorkspace) => void
+  onCloseWorkspace?: () => void
 }) {
   return (
     <div className="tab-menu-back" onMouseDown={onClose}>
@@ -4388,6 +4695,11 @@ function TabGroupMenu({
         ) : (
           <p className="hint">Save a workspace from Home first.</p>
         )}
+        {canCloseWorkspace && onCloseWorkspace ? (
+          <button type="button" className="tab-menu-item danger" onClick={onCloseWorkspace}>
+            Close workspace
+          </button>
+        ) : null}
       </div>
     </div>
   )

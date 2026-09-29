@@ -46,6 +46,19 @@ export interface RepoWorkspace {
   repos: string[]
 }
 
+export interface SessionTab {
+  path: string
+  name: string
+  workspaceId?: string
+  color?: string
+}
+
+export interface AppSession {
+  tabs: SessionTab[]
+  activePath?: string | null
+  collapsedGroups?: Record<string, boolean>
+}
+
 export interface WorkspaceSuggestion {
   name: string
   repos: string[]
@@ -247,6 +260,8 @@ export interface Settings {
   pinned: string[]
   onboarded: boolean
   editor: 'code' | 'cursor' | 'explorer'
+  /** Preferred external launcher id (IDE, agent, CLI, or system). */
+  defaultLauncher?: string
   aiProvider: AiProviderId
   aiModels: Record<string, string>
   aiEndpoints: AiEndpointConfig[]

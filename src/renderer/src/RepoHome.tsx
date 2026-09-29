@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import type { BulkResult, RepoHealth, RepoIssue, RepoOverview, RepoSort, RepoSummary, RepoWorkspace, Settings } from '../../shared/types'
+import type { LauncherInfo } from '../../shared/launchers'
 import {
   IcoAddRepo,
   IcoChevron,
   IcoClone,
   IcoCode,
-  IcoConsole,
   IcoCreate,
   IcoDeep,
   IcoFetch,
@@ -23,7 +23,7 @@ import {
   IcoWorkspaces,
   IcoWrench
 } from './icons'
-import { avatarColor, bindDrag, clamp, catchErr, formatAgo, initials, openMenu } from './lib'
+import { avatarColor, bindDrag, clamp, catchErr, formatAgo, initials, openMenu, openWithMenuItems } from './lib'
 
 type StatusFilter = 'all' | 'dirty' | 'behind' | 'ahead' | 'blocked'
 
@@ -77,8 +77,19 @@ export function RepoHome({
   const [picked, setPicked] = useState<string[]>([])
   const [anchor, setAnchor] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
+  const [launchers, setLaunchers] = useState<LauncherInfo[]>([])
+  const [defaultLauncher, setDefaultLauncher] = useState('cursor')
   const pinned = settings?.pinned ?? []
   const sort = settings?.repoSort ?? 'opened'
+
+  useEffect(() => {
+    void window.spoon.app.launchers().then((result: { launchers: LauncherInfo[]; defaultId: string }) => {
+      setLaunchers(result.launchers)
+      setDefaultLauncher(result.defaultId)
+    })
+  }, [settings?.defaultLauncher, settings?.editor])
+
+  const defaultOpen = launchers.find((item) => item.id === defaultLauncher && item.available) ?? launchers.find((item) => item.available)
   const overviewGen = useRef(0)
 
   const filtered = useMemo(() => {
@@ -282,11 +293,13 @@ export function RepoHome({
     const unsafe = paths.filter((item) => overviews[item]?.unsafe)
     const items: object[] = []
     if (one) {
+      const openItems = openWithMenuItems(launchers, { defaultId: defaultLauncher })
       items.push(
-        { id: 'open', label: 'Open' },
-        { id: 'editor', label: 'Editor' },
-        { id: 'terminal', label: 'Terminal' },
-        { id: 'explorer', label: 'Explorer' },
+        { id: 'open', label: 'Open in Spoon' },
+        {
+          label: 'Open with',
+          submenu: openItems.length ? openItems : [{ label: 'No launchers found', enabled: false }]
+        },
         { type: 'separator' }
       )
     }
@@ -315,9 +328,7 @@ export function RepoHome({
     })
     openMenu(items, (id) => {
       if (id === 'open' && repo) onOpen(repo.path, repo.name)
-      if (id === 'editor') void window.spoon.app.openIn(path, 'editor')
-      if (id === 'terminal') void window.spoon.app.openIn(path, 'terminal')
-      if (id === 'explorer') void window.spoon.app.openIn(path, 'explorer')
+      if (id.startsWith('open:')) void window.spoon.app.openWith(path, id.slice(5))
       if (id === 'fetch' || id === 'pull' || id === 'push' || id === 'refresh') void runBulk(id, paths)
       if (id === 'pin') void pinPaths(paths, true)
       if (id === 'unpin') void pinPaths(paths, false)
@@ -329,6 +340,17 @@ export function RepoHome({
         const workspace = workspaces.find((item) => item.id === id.slice(4))
         if (workspace) onAddToWorkspace(workspace, paths)
       }
+    })
+  }
+
+  function openWithMenu(path: string) {
+    const items = openWithMenuItems(launchers, { defaultId: defaultLauncher })
+    if (!items.length) {
+      void window.spoon.app.error('No editors, agents, or CLIs found on PATH.')
+      return
+    }
+    openMenu(items, (id) => {
+      if (id.startsWith('open:')) void window.spoon.app.openWith(path, id.slice(5))
     })
   }
 
@@ -797,28 +819,37 @@ export function RepoHome({
                   <IcoHome />
                   Open
                 </button>
-                <div className="repo-act-group" role="toolbar" aria-label="Open repository">
+                <div className="repo-act-group" role="toolbar" aria-label="Open repository externally">
                   <IconAct
                     bare
-                    label="Editor"
-                    hint="Open in editor"
-                    onClick={() => void window.spoon.app.openIn(current.path, 'editor')}
+                    label={defaultOpen?.label || 'Open with'}
+                    hint={
+                      defaultOpen
+                        ? `Open with ${defaultOpen.label} (${defaultOpen.kind.toUpperCase()}). Right-click or use ▾ for more.`
+                        : 'Choose how to open this repository'
+                    }
+                    onClick={() => {
+                      if (!defaultOpen) {
+                        openWithMenu(current.path)
+                        return
+                      }
+                      void window.spoon.app.openWith(current.path, defaultOpen.id)
+                    }}
+                    onContextMenu={(event) => {
+                      event.preventDefault()
+                      openWithMenu(current.path)
+                    }}
                   >
                     <IcoCode />
                   </IconAct>
-                  <IconAct
-                    bare
-                    label="Terminal"
-                    hint="Open in terminal"
-                    onClick={() => void window.spoon.app.openIn(current.path, 'terminal')}
-                  >
-                    <IcoConsole />
+                  <IconAct bare label="Open with…" hint="Choose IDE, agent, or CLI" onClick={() => openWithMenu(current.path)}>
+                    <IcoChevron />
                   </IconAct>
                   <IconAct
                     bare
                     label="Explorer"
                     hint="Reveal in file explorer"
-                    onClick={() => void window.spoon.app.openIn(current.path, 'explorer')}
+                    onClick={() => void window.spoon.app.openWith(current.path, 'explorer')}
                   >
                     <IcoOpen />
                   </IconAct>
@@ -1007,6 +1038,7 @@ function IconAct({
   hint,
   children,
   onClick,
+  onContextMenu,
   disabled,
   busy,
   danger,
@@ -1017,6 +1049,7 @@ function IconAct({
   hint?: string
   children: ReactNode
   onClick: () => void
+  onContextMenu?: (event: MouseEvent<HTMLButtonElement>) => void
   disabled?: boolean
   busy?: boolean
   danger?: boolean
@@ -1034,6 +1067,7 @@ function IconAct({
       aria-busy={busy || undefined}
       disabled={disabled}
       onClick={onClick}
+      onContextMenu={onContextMenu}
     >
       <span className="ico-wrap" aria-hidden>
         {children}
