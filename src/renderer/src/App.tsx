@@ -224,6 +224,7 @@ export function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>('light')
   const [tour, setTour] = useState(false)
   const [update, setUpdate] = useState<UpdateState>({ status: 'idle' })
+  const [confettiAt, setConfettiAt] = useState(0)
   const active = tabs.find((t) => t.id === activeId) || tabs[0]
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
@@ -560,6 +561,7 @@ export function App() {
         if (a === 'theme') void toggleTheme()
         if (a === 'about') setOverlay({ type: 'about' })
         if (a === 'tour') setTour(true)
+        if (a === 'confetti') document.dispatchEvent(new CustomEvent('spoon-confetti'))
         if (a === 'health') setOverlay({ type: 'health' })
         if (a === 'check-updates') void window.spoon.app.checkUpdate().then((s) => setUpdate(s as UpdateState))
         if (a === 'scan') {
@@ -847,7 +849,6 @@ export function App() {
   const menuTab = tabMenu ? tabs.find((tab) => tab.id === tabMenu.tabId) : undefined
 
   const snap = active.path ? snaps[active.path] : undefined
-  const [confettiAt, setConfettiAt] = useState(0)
 
   useEffect(() => {
     const burst = () => setConfettiAt(Date.now())
@@ -1268,36 +1269,131 @@ function UpdateBar({
 }
 
 function ConfettiBurst({ token }: { token: number }) {
-  const bits = useMemo(() => {
-    if (!token) return []
-    const colors = ['#7c3aed', '#c4b5fd', '#ffffff', '#f59e0b', '#6cb6ff', '#f472b6', '#34d399']
-    return Array.from({ length: 90 }, (_, i) => ({
-      x: `${Math.random() * 100}%`,
-      dx: `${(Math.random() - 0.5) * 240}px`,
-      delay: `${Math.random() * 0.35}s`,
-      dur: `${1.35 + Math.random() * 1.1}s`,
-      w: `${5 + Math.random() * 7}px`,
-      c: colors[i % colors.length]
-    }))
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    if (!token) return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const resize = () => {
+      canvas.width = Math.floor(window.innerWidth * dpr)
+      canvas.height = Math.floor(window.innerHeight * dpr)
+      canvas.style.width = `${window.innerWidth}px`
+      canvas.style.height = `${window.innerHeight}px`
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    }
+    resize()
+
+    const colors = ['#7c3aed', '#c4b5fd', '#ffffff', '#f59e0b', '#6cb6ff', '#f472b6', '#34d399', '#fb7185', '#a78bfa', '#22d3ee']
+    type Bit = {
+      x: number
+      y: number
+      vx: number
+      vy: number
+      w: number
+      h: number
+      rot: number
+      vr: number
+      color: string
+      shape: 0 | 1 | 2 | 3
+      drag: number
+      flutter: number
+      phase: number
+      alive: boolean
+    }
+
+    const W = () => window.innerWidth
+    const H = () => window.innerHeight
+    const bits: Bit[] = Array.from({ length: 240 }, (_, i) => {
+      const w = 4 + Math.random() * 9
+      return {
+        x: Math.random() * W(),
+        y: H() + 8 + Math.random() * 40,
+        vx: (Math.random() - 0.5) * 420,
+        vy: -(780 + Math.random() * 920),
+        w,
+        h: w * (0.35 + Math.random() * 1.1),
+        rot: Math.random() * Math.PI * 2,
+        vr: (Math.random() - 0.5) * 14,
+        color: colors[i % colors.length],
+        shape: (i % 4) as 0 | 1 | 2 | 3,
+        drag: 0.01 + Math.random() * 0.02,
+        flutter: 40 + Math.random() * 90,
+        phase: Math.random() * Math.PI * 2,
+        alive: true
+      }
+    })
+
+    const gravity = 1680
+    let last = performance.now()
+    let raf = 0
+    let living = bits.length
+
+    const tick = (now: number) => {
+      const dt = Math.min(0.033, (now - last) / 1000)
+      last = now
+      const width = W()
+      const height = H()
+      ctx.clearRect(0, 0, width, height)
+
+      living = 0
+      for (const b of bits) {
+        if (!b.alive) continue
+        living++
+
+        b.vy += gravity * dt
+        // Light air drag + sideways flutter while falling / rising
+        b.vx += Math.sin(now / 180 + b.phase) * b.flutter * dt
+        b.vx *= 1 - b.drag * 60 * dt
+        b.vy *= 1 - b.drag * 18 * dt
+        b.x += b.vx * dt
+        b.y += b.vy * dt
+        b.rot += b.vr * dt
+        // Spin slows near apex, picks up a bit while falling
+        b.vr *= 1 - 0.35 * dt
+        if (b.vy > 0) b.vr += Math.sin(now / 140 + b.phase) * 2.2 * dt
+
+        if (b.y > height + 60 || b.x < -80 || b.x > width + 80) {
+          b.alive = false
+          continue
+        }
+
+        ctx.save()
+        ctx.translate(b.x, b.y)
+        ctx.rotate(b.rot)
+        ctx.fillStyle = b.color
+        if (b.shape === 1) {
+          ctx.fillRect(-b.w / 2, -b.w / 2, b.w, b.w)
+        } else if (b.shape === 2) {
+          ctx.beginPath()
+          ctx.arc(0, 0, b.w / 2, 0, Math.PI * 2)
+          ctx.fill()
+        } else if (b.shape === 3) {
+          ctx.fillRect(-b.w * 0.14, -b.h * 0.7, b.w * 0.28, b.h * 1.4)
+        } else {
+          ctx.fillRect(-b.w / 2, -b.h / 2, b.w, b.h)
+        }
+        ctx.restore()
+      }
+
+      if (living > 0) raf = requestAnimationFrame(tick)
+      else ctx.clearRect(0, 0, width, height)
+    }
+
+    raf = requestAnimationFrame(tick)
+    window.addEventListener('resize', resize)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('resize', resize)
+    }
   }, [token])
+
   if (!token) return null
-  return (
-    <div className="confetti" aria-hidden>
-      {bits.map((b, i) => (
-        <i
-          key={`${token}-${i}`}
-          style={{
-            ['--x' as string]: b.x,
-            ['--dx' as string]: b.dx,
-            ['--delay' as string]: b.delay,
-            ['--dur' as string]: b.dur,
-            ['--w' as string]: b.w,
-            ['--c' as string]: b.c
-          }}
-        />
-      ))}
-    </div>
-  )
+  return <canvas ref={canvasRef} className="confetti" aria-hidden />
 }
 
 function ModelMenu({
@@ -4462,8 +4558,17 @@ function SettingsDialog({
             One AI button writes the message and, depending on Settings → AI, may also commit or push. Ctrl+Enter commits with your
             message; Ctrl+Shift+Enter commits and pushes. If no provider is connected, the AI button opens Settings → AI.
           </p>
+          <p className="hint">Celebrate a successful push with confetti: press Ctrl+Shift+. anytime, or use the button below.</p>
           <h3>Guides</h3>
           <div className="row-btns" style={{ marginTop: 4 }}>
+            <button
+              className="ghost"
+              onClick={() => {
+                document.dispatchEvent(new CustomEvent('spoon-confetti'))
+              }}
+            >
+              Confetti (Ctrl+Shift+.)
+            </button>
             <button
               className="ghost"
               onClick={() => {

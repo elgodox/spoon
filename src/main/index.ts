@@ -178,6 +178,13 @@ function createWindow(): void {
     return { action: 'deny' }
   })
 
+  mainWindow.webContents.on('before-input-event', (_event, input) => {
+    if (input.type !== 'keyDown' || input.isAutoRepeat) return
+    if (!(input.control || input.meta) || !input.shift || input.alt) return
+    if (input.key !== '.' && input.code !== 'Period') return
+    send('menu', 'confetti')
+  })
+
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']
   if (rendererUrl) {
     void mainWindow.loadURL(rendererUrl)
@@ -433,6 +440,7 @@ function buildMenu(): void {
           }
         },
         { type: 'separator' },
+        { label: 'Confetti!', accelerator: 'Ctrl+Shift+.', click: () => sendMenu('confetti') },
         { label: 'Take the Tour', click: () => sendMenu('tour') },
         { label: 'Check for Updates…', click: () => sendMenu('check-updates') },
         { label: 'About Spoon', click: () => sendMenu('about') }
