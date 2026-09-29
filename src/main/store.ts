@@ -3,6 +3,12 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEFAULT_AI_MODELS, fallbackAiProvider } from '../shared/models'
 import type { AiProviderId, RepoSummary, RepoWorkspace, Settings, ThemeMode } from '../shared/types'
+import {
+  sanitizeAccentCustom,
+  sanitizeAccentId,
+  sanitizeIconStyle,
+  sanitizeThemePack
+} from '../shared/themes'
 import { normalizeWorkspaceColor, sanitizeWorkspaces, uniqueRepoPaths, workspaceColor } from '../shared/workspaces'
 
 export interface StoredAiCreds {
@@ -32,11 +38,14 @@ function sanitizeTheme(theme: unknown): ThemeMode {
 
 const defaults: Settings = {
   theme: 'dark',
+  themePack: 'classic',
+  iconStyle: 'mono',
+  accentId: 'blue',
   fetchIntervalMin: 10,
   autoFetch: true,
   autoFetchAll: false,
   autoUpdate: true,
-  material: 'mica',
+  material: 'none',
   watchedRoots: [],
   pinned: [],
   onboarded: false,
@@ -44,7 +53,7 @@ const defaults: Settings = {
   aiProvider: 'grok',
   aiModels: { ...DEFAULT_AI_MODELS },
   aiEndpoints: [],
-  aiCommitMode: 'fill',
+  aiCommitMode: 'commit',
   aiStageAll: true,
   recentMessages: [],
   starred: {},
@@ -57,7 +66,7 @@ const defaults: Settings = {
   ignoreWhitespace: false,
   diffMode: 'unified',
   showAvatars: true,
-  glass: 40,
+  glass: 0,
   repoSort: 'opened'
 }
 
@@ -88,9 +97,16 @@ function load(): StoreFile {
         onboarded: hadSettings && (parsed.recent?.length ?? 0) > 0,
         ...(parsed.settings as Partial<Settings> | undefined),
         theme: sanitizeTheme((parsed.settings as Partial<Settings> | undefined)?.theme),
+        themePack: sanitizeThemePack((parsed.settings as Partial<Settings> | undefined)?.themePack),
+        iconStyle: sanitizeIconStyle((parsed.settings as Partial<Settings> | undefined)?.iconStyle),
+        accentId: sanitizeAccentId((parsed.settings as Partial<Settings> | undefined)?.accentId),
+        accentCustom: sanitizeAccentCustom((parsed.settings as Partial<Settings> | undefined)?.accentCustom),
         aiProvider: fallbackAiProvider((parsed.settings as Partial<Settings> | undefined)?.aiProvider),
         aiModels: sanitizeAiModels({ ...defaults.aiModels, ...(parsed.settings?.aiModels ?? {}) }),
-        aiEndpoints: parsed.settings?.aiEndpoints ?? []
+        aiEndpoints: parsed.settings?.aiEndpoints ?? [],
+        // Transparency removed — keep chrome solid for every pack.
+        glass: 0,
+        material: 'none'
       },
       recent: parsed.recent ?? [],
       folders: parsed.folders ?? [],

@@ -34,15 +34,24 @@ import { AI_SITE_CATALOG, customProviderId } from '../../shared/ai-catalog'
 import { ProviderIcon } from './ai-logos'
 import { AI_MODELS, BUILTIN_AI_IDS, DEFAULT_AI_MODELS, defaultModelFor, fallbackAiProvider, hasConnectedAi, listedProviderIds, PAID_AI_PROVIDERS, providerLabel, resolveAiProvider } from '../../shared/models'
 import {
+  ACCENTS,
+  ICON_COLORS,
+  iconColorMap,
+  resolveAccent,
+  SPACEX_ICON_COLORS,
+  THEME_PACKS
+} from '../../shared/themes'
+import type { AccentId, IconStyle, ThemePack } from '../../shared/types'
+
+const ICO_VAR_KEYS = Array.from(new Set([...Object.keys(ICON_COLORS), ...Object.keys(SPACEX_ICON_COLORS)]))
+import {
   IcoAi,
   IcoBranch,
   IcoChanges,
-  IcoCheck,
   IcoChevron,
   IcoClose,
   IcoConsole,
   IcoCreate,
-  IcoDeep,
   IcoFetch,
   IcoHealth,
   IcoHelp,
@@ -199,14 +208,46 @@ export function App() {
   const tabsRef = useRef(tabs)
   tabsRef.current = tabs
 
-  const applyTheme = useCallback((mode: Settings['theme']) => {
-    const next = mode === 'dark' ? 'dark' : 'light'
+  const applyAppearance = useCallback((s: Settings) => {
+    const pack = s.themePack || 'classic'
+    const mode = pack === 'spacex' ? 'dark' : s.theme === 'dark' ? 'dark' : 'light'
+    const icons = s.iconStyle || 'mono'
+    const root = document.documentElement
+    const changed =
+      root.dataset.theme !== mode || root.dataset.pack !== pack || root.dataset.icons !== icons
     setTheme((prev) => {
-      if (prev !== next) snapThemeTransitions()
-      return next
+      if (prev !== mode || changed) snapThemeTransitions()
+      return mode
     })
-    document.documentElement.dataset.theme = next
+    root.dataset.theme = mode
+    root.dataset.pack = pack
+    root.dataset.icons = icons
+    const accentId = pack === 'spacex' && (!s.accentId || s.accentId === 'blue') ? 'red' : s.accentId
+    const { accent, accent2 } = resolveAccent(accentId, mode, s.accentCustom)
+    root.style.setProperty('--accent', accent)
+    root.style.setProperty('--accent-2', accent2)
+    const iconMap = iconColorMap(pack, icons)
+    for (const key of ICO_VAR_KEYS) {
+      if (iconMap?.[key]) root.style.setProperty(`--ico-${key}`, iconMap[key])
+      else root.style.removeProperty(`--ico-${key}`)
+    }
   }, [])
+
+  const commitSettings = useCallback(
+    async (next: Settings) => {
+      // Keep ref in sync before any theme:native echo can re-apply appearance.
+      settingsRef.current = next
+      setSettings(next)
+      applyAppearance(next)
+      try {
+        const chrome = (await window.spoon.app.chrome()) as { material?: string }
+        if (chrome.material) document.documentElement.dataset.material = chrome.material
+      } catch {
+        /* ignore */
+      }
+    },
+    [applyAppearance]
+  )
 
   const refreshModels = useCallback(async (force = false) => {
     const ids = listedProviderIds(settingsRef.current)
@@ -235,9 +276,10 @@ export function App() {
 
   const refreshSettings = useCallback(async () => {
     const s = await window.spoon.app.settings()
+    settingsRef.current = s
     setSettings(s)
     setSidebarW(s.sidebarWidth || 220)
-    applyTheme(s.theme)
+    applyAppearance(s)
     setRecent(await window.spoon.app.recent())
     setWorkspaces((await window.spoon.app.workspaces()) as RepoWorkspace[])
     setAccounts(await window.spoon.ai.accounts())
@@ -245,7 +287,7 @@ export function App() {
     const chrome = (await window.spoon.app.chrome()) as { material?: string }
     if (chrome.material) document.documentElement.dataset.material = chrome.material
     setUpdate((await window.spoon.app.update()) as UpdateState)
-  }, [applyTheme])
+  }, [applyAppearance])
 
   useEffect(() => {
     void refreshModels(true)
@@ -255,9 +297,10 @@ export function App() {
 
   useEffect(() => {
     return window.spoon.app.on('theme:native', () => {
-      applyTheme(settingsRef.current?.theme ?? 'dark')
+      // Never invent settings here — only re-paint from the latest committed prefs.
+      if (settingsRef.current) applyAppearance(settingsRef.current)
     })
-  }, [applyTheme])
+  }, [applyAppearance])
 
   const loadRepo = useCallback(async (path: string, name?: string) => {
     setBusy(true)
@@ -407,6 +450,7 @@ export function App() {
         if (a === 'ai-fill') document.dispatchEvent(new CustomEvent('spoon-ai-fill'))
         if (a === 'ai-commit') document.dispatchEvent(new CustomEvent('spoon-ai-commit'))
         if (a === 'ai-commit-push') document.dispatchEvent(new CustomEvent('spoon-ai-commit-push'))
+        if (a === 'ai-primary') document.dispatchEvent(new CustomEvent('spoon-ai-primary'))
         if (a === 'analyze') document.dispatchEvent(new CustomEvent('spoon-analyze'))
         if (a === 'changes') document.dispatchEvent(new CustomEvent('spoon-view', { detail: 'changes' }))
         if (a === 'commits') document.dispatchEvent(new CustomEvent('spoon-view', { detail: 'commits' }))
@@ -416,8 +460,10 @@ export function App() {
       window.spoon.app.on('open-path', (p) => void loadRepo(String(p))),
       window.spoon.app.on('update', (s) => setUpdate(s as UpdateState)),
       window.spoon.app.on('chrome', (info) => {
-        const material = (info as { material?: string })?.material
+        const material = (info as { material?: string; bar?: string; symbol?: string })?.material
+        const bar = (info as { bar?: string })?.bar
         if (material) document.documentElement.dataset.material = material
+        if (bar) document.documentElement.style.setProperty('--chrome-native', bar)
       }),
       window.spoon.app.on('auto-fetch', () => {
         if (active.path) void window.spoon.git.fetch(active.path, { all: true, prune: true }).then(() => reload())
@@ -457,8 +503,7 @@ export function App() {
     if (!settings) return
     const next = theme === 'light' ? 'dark' : 'light'
     const s = await window.spoon.app.patchSettings({ theme: next })
-    setSettings(s)
-    applyTheme(s.theme)
+    await commitSettings(s)
   }
 
   async function runRemote(kind: 'fetch' | 'pull' | 'push') {
@@ -649,9 +694,6 @@ export function App() {
   const menuTab = tabMenu ? tabs.find((tab) => tab.id === tabMenu.tabId) : undefined
 
   const snap = active.path ? snaps[active.path] : undefined
-  const glass = settings?.glass ?? 40
-  const glassFill = glass <= 0 ? 100 : Math.max(70, 96 - glass * 0.32)
-  const glassContent = glass <= 0 ? 100 : Math.min(94, Math.max(82, 102 - glass * 0.22))
   const [confettiAt, setConfettiAt] = useState(0)
 
   useEffect(() => {
@@ -667,45 +709,42 @@ export function App() {
 
   return (
     <div
-      className={`app ${busy ? 'busy' : ''} ${glass > 0 ? 'frost' : ''}`}
+      className={`app ${busy ? 'busy' : ''}`}
       data-theme={theme}
-      style={{
-        ['--glass-fill' as string]: `${glassFill}%`,
-        ['--glass-content' as string]: `${glassContent}%`,
-        ['--glass-blur' as string]: `${Math.round(10 + glass * 0.3)}px`
-      }}
+      data-pack={settings?.themePack ?? 'classic'}
+      data-icons={settings?.iconStyle ?? 'mono'}
     >
       <div className="toolbar">
         <div className="tb-group" data-tour="sync">
-          <button className="tb-btn brand" title="About Spoon" aria-label="About Spoon" onClick={() => setOverlay({ type: 'about' })}>
+          <button className="tb-btn brand" data-ico="brand" title="About Spoon" aria-label="About Spoon" onClick={() => setOverlay({ type: 'about' })}>
             <IcoSpoon />
             <span>Spoon</span>
           </button>
-          <button className="tb-btn" title="Quick Launch (Ctrl+P)" onClick={() => setQuick(true)}>
+          <button className="tb-btn" data-ico="launch" title="Quick Launch (Ctrl+P)" onClick={() => setQuick(true)}>
             <IcoLaunch />
             <span>Quick Launch</span>
           </button>
-          <button className="tb-btn" title="Manage workspaces" onClick={() => setManageWs(true)}>
+          <button className="tb-btn" data-ico="workspaces" title="Manage workspaces" onClick={() => setManageWs(true)}>
             <IcoWorkspaces />
             <span>Workspaces</span>
           </button>
-          <button className="tb-btn" disabled={!active.path} onClick={() => void runRemote('fetch')}>
+          <button className="tb-btn" data-ico="fetch" disabled={!active.path} onClick={() => void runRemote('fetch')}>
             <IcoFetch />
             <span>Fetch{snap?.status.behind ? '*' : ''}</span>
           </button>
-          <button className="tb-btn" disabled={!active.path} onClick={() => void runRemote('pull')}>
+          <button className="tb-btn" data-ico="pull" disabled={!active.path} onClick={() => void runRemote('pull')}>
             <IcoPull />
             <span>Pull{snap?.status.behind ? ` ${snap.status.behind}` : ''}</span>
           </button>
-          <button className="tb-btn" disabled={!active.path} onClick={() => void runRemote('push')}>
+          <button className="tb-btn" data-ico="push" disabled={!active.path} onClick={() => void runRemote('push')}>
             <IcoPush />
             <span>Push{snap?.status.ahead ? ` ${snap.status.ahead}` : ''}</span>
           </button>
-          <button className="tb-btn" disabled={!active.path} onClick={() => void reload(active.path)} title="Refresh this repository">
+          <button className="tb-btn" data-ico="refresh" disabled={!active.path} onClick={() => void reload(active.path)} title="Refresh this repository">
             <IcoRefresh />
             <span>Refresh</span>
           </button>
-          <button className="tb-btn" disabled={!active.path} onClick={() => setOverlay({ type: 'stash' })}>
+          <button className="tb-btn" data-ico="stash" disabled={!active.path} onClick={() => setOverlay({ type: 'stash' })}>
             <IcoStash />
             <span>Stash</span>
           </button>
@@ -732,32 +771,34 @@ export function App() {
           </div>
         </div>
         <div className="tb-group right">
-          <button className="tb-btn" disabled={!active.path} onClick={() => setOverlay({ type: 'branch' })}>
+          <button className="tb-btn" data-ico="branch" disabled={!active.path} onClick={() => setOverlay({ type: 'branch' })}>
             <IcoBranch />
             <span>New Branch</span>
           </button>
           <button
             className="tb-btn"
+            data-ico="terminal"
             disabled={!active.path}
             onClick={() => active.path && window.spoon.app.showItem(active.path)}
           >
             <IcoOpen />
             <span>Open in</span>
           </button>
-          <button className="tb-btn" disabled={!active.path} onClick={() => setOverlay({ type: 'health' })}>
+          <button className="tb-btn" data-ico="health" disabled={!active.path} onClick={() => setOverlay({ type: 'health' })}>
             <IcoHealth />
             <span>Health</span>
           </button>
-          <button className="tb-btn" onClick={() => setActivityOpen((v) => !v)}>
+          <button className="tb-btn" data-ico="activity" onClick={() => setActivityOpen((v) => !v)}>
             <IcoConsole />
             <span>Console</span>
           </button>
-          <button className="tb-btn" data-tour="home" onClick={goHome}>
+          <button className="tb-btn" data-ico="home" data-tour="home" onClick={goHome}>
             <IcoHome />
             <span>Home</span>
           </button>
           <button
             className="tb-btn"
+            data-ico="settings"
             data-tour="prefs"
             title="Appearance, AI, and Help"
             onClick={() => setOverlay({ type: 'settings' })}
@@ -894,8 +935,9 @@ export function App() {
           onReload={() => void reload()}
           onOpen={loadRepo}
           onHelp={() => setOverlay({ type: 'settings', tab: 'help' })}
-          onSettings={async () => {
-            await refreshSettings()
+          onSettings={async (next) => {
+            if (next) await commitSettings(next)
+            else await refreshSettings()
           }}
         />
       )}
@@ -1261,6 +1303,7 @@ function Workspace({
   const aiConfigured = hasConnectedAi(accounts)
   const model = defaultModelFor(provider, settings)
   const modelChoices = modelOptions(catalogs[provider], model)
+  const committingRef = useRef(false)
 
   const changesCount = snap.status.stagedCount + snap.status.unstagedCount
   const showingChanges = sel.kind === 'changes'
@@ -1333,7 +1376,9 @@ function Workspace({
   }
 
   async function doCommit(pushAfter: boolean) {
+    if (committingRef.current) return
     if (!msg.trim() && !amend) return
+    committingRef.current = true
     onBusy(true)
     await catchErr(async () => {
       await window.spoon.git.commit(path, { message: msg.trim() || snap.commits[0]?.subject || 'Update', amend })
@@ -1346,6 +1391,7 @@ function Workspace({
       onReload()
     })
     onBusy(false)
+    committingRef.current = false
   }
 
   function openAiSettings() {
@@ -1358,11 +1404,17 @@ function Workspace({
     return false
   }
 
-  async function aiFill(andGo: 'fill' | 'commit' | 'commit-push') {
+  async function aiFill(andGo: 'fill' | 'commit' | 'commit-push' = settings?.aiCommitMode ?? 'commit') {
     if (!requireAi()) return
     setAiBusy(true)
     await catchErr(async () => {
-      if (andGo !== 'fill' && !snap.status.stagedCount) await window.spoon.git.stageAll(path)
+      if (andGo !== 'fill' && !snap.status.stagedCount) {
+        if (settings?.aiStageAll === false) {
+          await window.spoon.app.error('Stage changes first, or enable “Stage all when empty” in Settings → AI.')
+          return
+        }
+        await window.spoon.git.stageAll(path)
+      }
       let text = msg.trim()
       if (andGo === 'fill' || !text) {
         const stagedPatch = (await window.spoon.git.stagedPatch(path)) as string
@@ -1438,12 +1490,14 @@ function Workspace({
     const fill = () => void aiFill('fill')
     const ai = () => void aiFill('commit')
     const aip = () => void aiFill('commit-push')
+    const primary = () => void aiFill()
     const an = () => void runAnalysis()
     document.addEventListener('spoon-commit', c)
     document.addEventListener('spoon-commit-push', cp)
     document.addEventListener('spoon-ai-fill', fill)
     document.addEventListener('spoon-ai-commit', ai)
     document.addEventListener('spoon-ai-commit-push', aip)
+    document.addEventListener('spoon-ai-primary', primary)
     document.addEventListener('spoon-analyze', an)
     return () => {
       document.removeEventListener('spoon-commit', c)
@@ -1451,9 +1505,10 @@ function Workspace({
       document.removeEventListener('spoon-ai-fill', fill)
       document.removeEventListener('spoon-ai-commit', ai)
       document.removeEventListener('spoon-ai-commit-push', aip)
+      document.removeEventListener('spoon-ai-primary', primary)
       document.removeEventListener('spoon-analyze', an)
     }
-  }, [path, msg, amend, snap, provider, model, aiConfigured])
+  }, [path, msg, amend, snap, provider, model, aiConfigured, settings?.aiCommitMode, settings?.aiStageAll])
 
   function pulsePath(hash: string, list: CommitInfo[]) {
     const byHash = new Map(list.map((c) => [c.hash, c]))
@@ -1897,6 +1952,9 @@ function Workspace({
               <div className="diff-tools">
                 <span className="diff-path">{file || 'Select a file'}</span>
                 <span style={{ marginLeft: 'auto' }} />
+                <button className="ghost" disabled={planBusy} title="Split changes into planned commits (Ctrl+Alt+A)" onClick={() => void runAnalysis()}>
+                  {planBusy ? 'Analyzing...' : 'Analyze'}
+                </button>
                 <button className="ghost" onClick={() => setSplit((v) => !v)}>
                   {split ? 'Unified' : 'Side by side'}
                 </button>
@@ -1976,12 +2034,14 @@ function Workspace({
               />
               <div className="commit-box">
                 <textarea
-                  placeholder="Commit message"
+                  placeholder="Commit message · Ctrl+Enter to commit"
                   value={msg}
                   style={{ height: Math.max(64, commitH - 52) }}
                   onChange={(e) => setMsg(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) e.preventDefault()
+                    if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return
+                    e.preventDefault()
+                    void doCommit(e.shiftKey)
                   }}
                 />
                 <div className="commit-bar">
@@ -2000,25 +2060,22 @@ function Workspace({
                     }
                   />
                   <div className="commit-actions">
-                    <button className="ghost ico-text" disabled={aiBusy} onClick={() => void aiFill('fill')}>
-                      <IcoAi />
-                      <span>{aiBusy ? 'Writing...' : 'AI message'}</span>
-                    </button>
-                    <button className="ghost ico-text" disabled={planBusy} onClick={() => void runAnalysis()}>
-                      <IcoDeep />
-                      <span>{planBusy ? 'Analyzing...' : 'Analyze'}</span>
-                    </button>
-                    <button className="primary ico-text" disabled={!snap.status.stagedCount && !amend} onClick={() => void doCommit(false)}>
-                      <IcoCheck />
-                      <span>Commit {snap.status.stagedCount}</span>
-                    </button>
-                    <button className="primary ai ico-text" disabled={aiBusy} onClick={() => void aiFill('commit')}>
+                    <button
+                      className="primary ai ico-text"
+                      disabled={aiBusy}
+                      title="Change what this does in Settings → AI"
+                      onClick={() => void aiFill()}
+                    >
                       <IcoSpoon />
-                      <span>AI commit</span>
-                    </button>
-                    <button className="ghost ico-text" onClick={() => void doCommit(true)}>
-                      <IcoPush />
-                      <span>Commit & push</span>
+                      <span>
+                        {aiBusy
+                          ? 'Working...'
+                          : (settings?.aiCommitMode ?? 'commit') === 'fill'
+                            ? 'AI message'
+                            : (settings?.aiCommitMode ?? 'commit') === 'commit-push'
+                              ? 'AI commit & push'
+                              : 'AI commit'}
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -2761,7 +2818,7 @@ function DialogHost({
   onReload: () => void
   onOpen: (p: string, n?: string) => void
   onHelp: () => void
-  onSettings: () => Promise<void>
+  onSettings: (next?: Settings) => Promise<void>
 }) {
   if (!overlay) return null
   if (overlay.type === 'about') return <AboutDialog onClose={onClose} onHelp={onHelp} />
@@ -3264,7 +3321,7 @@ function SettingsDialog({
   catalogs: Record<AiProviderId, AiModelCatalog>
   initialTab?: PrefsTab
   onClose: () => void
-  onSaved: () => Promise<void>
+  onSaved: (next?: Settings) => Promise<void>
 }) {
   const [tab, setTab] = useState<PrefsTab>(initialTab ?? lastPrefsTab)
   const [navCollapsed, setNavCollapsed] = useState(lastPrefsNav)
@@ -3316,11 +3373,18 @@ function SettingsDialog({
     await onSaved()
   }
 
+  async function persist(patch: Partial<Settings>) {
+    // Paint immediately so theme:native echoes cannot flash the previous pack.
+    if (settings) await onSaved({ ...settings, ...patch })
+    const next = await window.spoon.app.patchSettings(patch)
+    await onSaved(next)
+    return next
+  }
+
   async function selectProvider(id: AiProviderId) {
     setProvider(id)
     setAiPick({ type: 'provider', id })
-    await window.spoon.app.patchSettings({ aiProvider: id })
-    await onSaved()
+    await persist({ aiProvider: id })
   }
 
   async function addSite(site: AiEndpointConfig, apiKey?: string, model?: string) {
@@ -3433,49 +3497,148 @@ function SettingsDialog({
 
       {tab === 'look' && (
         <section className="prefs-pane" role="tabpanel" id="prefs-panel-look" aria-labelledby="prefs-tab-look">
-          <h3>Theme</h3>
-          <div className="seg">
-            {(['light', 'dark'] as const).map((t) => (
-              <button
-                key={t}
-                className={settings?.theme === t ? 'on' : ''}
-                onClick={async () => {
-                  await window.spoon.app.patchSettings({ theme: t })
-                  await onSaved()
-                }}
-              >
-                {t === 'dark' ? 'Dark' : 'Light'}
-              </button>
-            ))}
+          <h3>Look</h3>
+          <div className="theme-pack-grid">
+            {THEME_PACKS.map((pack) => {
+              const on = (settings?.themePack ?? 'classic') === pack.id
+              return (
+                <button
+                  key={pack.id}
+                  type="button"
+                  className={`theme-pack-card ${on ? 'on' : ''} pack-${pack.id}`}
+                  onClick={() => {
+                    const patch: Partial<Settings> = {
+                      themePack: pack.id,
+                      iconStyle: pack.preferIcons ?? 'mono',
+                      accentId: pack.preferAccent ?? 'blue'
+                    }
+                    if (pack.preferDark) patch.theme = 'dark'
+                    void persist(patch)
+                  }}
+                >
+                  <span className="theme-pack-swatches" aria-hidden="true">
+                    {pack.preview.map((c) => (
+                      <span key={c} style={{ background: c }} />
+                    ))}
+                  </span>
+                  <strong>{pack.label}</strong>
+                  <span className="hint">{pack.blurb}</span>
+                </button>
+              )
+            })}
           </div>
-          <label>Frosted glass</label>
-          <input
-            type="range"
-            min={0}
-            max={80}
-            value={settings?.glass ?? 40}
-            onChange={(e) => {
-              const glass = Number(e.target.value)
-              void window.spoon.app.patchSettings({ glass }).then(() => void onSaved())
-            }}
-          />
-          <p className="hint">{settings?.glass ?? 40}% frost. Toolbar and sidebar show the window texture. Panels stay readable. 0 is solid.</p>
-          <h3>Window material</h3>
-          <div className="seg">
-            {(['mica', 'acrylic', 'none'] as const).map((m) => (
-              <button
-                key={m}
-                className={(settings?.material ?? 'mica') === m ? 'on' : ''}
-                onClick={async () => {
-                  await window.spoon.app.patchSettings({ material: m })
-                  await onSaved()
-                }}
-              >
-                {m === 'none' ? 'Solid' : m === 'mica' ? 'Mica' : 'Acrylic'}
-              </button>
-            ))}
+
+          <h3>Mode</h3>
+          <div className="theme-pack-grid mode-grid">
+            {(
+              [
+                {
+                  id: 'light' as const,
+                  label: 'Light',
+                  blurb: 'Bright chrome and paper panels.',
+                  preview: ['#f3f3f3', '#ffffff', '#0b57d0']
+                },
+                {
+                  id: 'dark' as const,
+                  label: 'Dark',
+                  blurb: 'Dim chrome with soft contrast.',
+                  preview: ['#2d2d2d', '#1e1e1e', '#6cb6ff']
+                }
+              ] as const
+            ).map((item) => {
+              const locked = settings?.themePack === 'spacex' && item.id === 'light'
+              const on = (settings?.theme ?? 'dark') === item.id
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`theme-pack-card ${on ? 'on' : ''} mode-${item.id}`}
+                  disabled={locked}
+                  title={locked ? 'SpaceX stays dark' : undefined}
+                  onClick={() => void persist({ theme: item.id })}
+                >
+                  <span className={`theme-preview-surface mode-${item.id}`} aria-hidden="true">
+                    <span className="theme-preview-bar" style={{ background: item.preview[0] }} />
+                    <span className="theme-preview-body" style={{ background: item.preview[1] }}>
+                      <span className="theme-preview-accent" style={{ background: item.preview[2] }} />
+                    </span>
+                  </span>
+                  <strong>{item.label}</strong>
+                  <span className="hint">{item.blurb}</span>
+                </button>
+              )
+            })}
           </div>
-          <p className="hint">Mica and acrylic need Windows 11. Acrylic is more transparent.</p>
+
+          <h3>Icons</h3>
+          <div className="theme-pack-grid mode-grid">
+            {(
+              [
+                {
+                  id: 'mono' as const,
+                  label: 'Mono',
+                  blurb: 'Toolbar icons inherit the text color.',
+                  tones: ['#9a9a9a', '#9a9a9a', '#9a9a9a', '#9a9a9a']
+                },
+                {
+                  id: 'color' as const,
+                  label: 'Color',
+                  blurb: 'Fetch, Pull, Push and friends get tint.',
+                  tones: ['#60a5fa', '#34d399', '#fbbf24', '#e81828']
+                }
+              ] as const
+            ).map((item) => {
+              const on = (settings?.iconStyle ?? 'mono') === item.id
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  className={`theme-pack-card ${on ? 'on' : ''} icons-${item.id}`}
+                  onClick={() => void persist({ iconStyle: item.id as IconStyle })}
+                >
+                  <span className="theme-preview-icons" aria-hidden="true">
+                    {(
+                      [
+                        [item.tones[0], IcoFetch],
+                        [item.tones[1], IcoPull],
+                        [item.tones[2], IcoPush],
+                        [item.tones[3], IcoRefresh]
+                      ] as const
+                    ).map(([tone, Icon], i) => (
+                      <span key={`${item.id}-${i}`} className="theme-preview-ico" style={{ color: tone }}>
+                        <Icon />
+                      </span>
+                    ))}
+                  </span>
+                  <strong>{item.label}</strong>
+                  <span className="hint">{item.blurb}</span>
+                </button>
+              )
+            })}
+          </div>
+          <p className="hint">Color tints toolbar actions. Mono keeps everything in the text color.</p>
+
+          <h3>Accent</h3>
+          <div className="accent-row">
+            {ACCENTS.filter((a) => a.id !== 'custom').map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className={`accent-swatch ${(settings?.accentId ?? 'blue') === a.id ? 'on' : ''}`}
+                style={{ ['--swatch' as string]: a.swatch }}
+                title={a.label}
+                aria-label={a.label}
+                onClick={() => void persist({ accentId: a.id as AccentId })}
+              />
+            ))}
+            <label className={`accent-swatch custom ${(settings?.accentId ?? 'blue') === 'custom' ? 'on' : ''}`} title="Custom">
+              <input
+                type="color"
+                value={settings?.accentCustom ?? '#6cb6ff'}
+                onChange={(e) => void persist({ accentId: 'custom', accentCustom: e.target.value })}
+              />
+            </label>
+          </div>
         </section>
       )}
 
@@ -3486,10 +3649,7 @@ function SettingsDialog({
             <input
               type="checkbox"
               checked={settings?.autoFetch !== false}
-              onChange={async (e) => {
-                await window.spoon.app.patchSettings({ autoFetch: e.target.checked })
-                await onSaved()
-              }}
+              onChange={(e) => void persist({ autoFetch: e.target.checked })}
             />
             Fetch the open repository on a timer
           </label>
@@ -3497,10 +3657,7 @@ function SettingsDialog({
             <input
               type="checkbox"
               checked={!!settings?.autoFetchAll}
-              onChange={async (e) => {
-                await window.spoon.app.patchSettings({ autoFetchAll: e.target.checked })
-                await onSaved()
-              }}
+              onChange={(e) => void persist({ autoFetchAll: e.target.checked })}
             />
             Also fetch pinned and recently opened repos
           </label>
@@ -3510,20 +3667,14 @@ function SettingsDialog({
             min={1}
             max={120}
             value={settings?.fetchIntervalMin ?? 10}
-            onChange={async (e) => {
-              await window.spoon.app.patchSettings({ fetchIntervalMin: Math.max(1, Number(e.target.value) || 10) })
-              await onSaved()
-            }}
+            onChange={(e) => void persist({ fetchIntervalMin: Math.max(1, Number(e.target.value) || 10) })}
           />
           <h3>Updates</h3>
           <label className="check">
             <input
               type="checkbox"
               checked={settings?.autoUpdate !== false}
-              onChange={async (e) => {
-                await window.spoon.app.patchSettings({ autoUpdate: e.target.checked })
-                await onSaved()
-              }}
+              onChange={(e) => void persist({ autoUpdate: e.target.checked })}
             />
             Download updates automatically
           </label>
@@ -3538,10 +3689,7 @@ function SettingsDialog({
               <button
                 key={id}
                 className={(settings?.editor ?? 'code') === id ? 'on' : ''}
-                onClick={async () => {
-                  await window.spoon.app.patchSettings({ editor: id })
-                  await onSaved()
-                }}
+                onClick={() => void persist({ editor: id })}
               >
                 {label}
               </button>
@@ -3552,9 +3700,39 @@ function SettingsDialog({
 
       {tab === 'ai' && (
         <section className="prefs-pane ai-pane" id="prefs-panel-ai">
-          <p className="hint">
-            Connect Grok, ChatGPT, Claude, or a site from the catalog. AI message fills the box. AI commit stays local.
-          </p>
+          <div className="ai-pane-head">
+            <div className="ai-commit-card">
+              <div className="ai-commit-copy">
+                <h3>Commit button</h3>
+                <p className="hint">Ctrl+Enter commits. Ctrl+Shift+Enter commits and pushes.</p>
+              </div>
+              <div className="seg ai-commit-seg">
+                {(
+                  [
+                    ['fill', 'Write message'],
+                    ['commit', 'Commit'],
+                    ['commit-push', 'Commit & push']
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    className={(settings?.aiCommitMode ?? 'commit') === id ? 'on' : ''}
+                    onClick={() => void persist({ aiCommitMode: id })}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <label className="check ai-stage-check">
+                <input
+                  type="checkbox"
+                  checked={settings?.aiStageAll !== false}
+                  onChange={(e) => void persist({ aiStageAll: e.target.checked })}
+                />
+                Stage all changes when nothing is staged
+              </label>
+            </div>
+          </div>
           <div className={`ai-layout ${aiNavCollapsed ? 'collapsed' : ''}`}>
             <nav className="rail ai-rail" aria-label="AI providers">
               <button
@@ -3570,6 +3748,7 @@ function SettingsDialog({
                 </span>
                 <span className="rail-label">Providers</span>
               </button>
+              <div className="ai-rail-scroll">
               <div className="rail-kicker">Yours</div>
               {yours.map((p) => {
                 const st = providerStatus(p)
@@ -3625,6 +3804,7 @@ function SettingsDialog({
                 </span>
                 <span className="rail-label">Custom endpoint</span>
               </button>
+              </div>
             </nav>
             <div className="ai-detail">
               {aiPick.type === 'provider' && (() => {
@@ -3638,14 +3818,16 @@ function SettingsDialog({
                       <span className="ai-mark">
                         <ProviderIcon id={p} label={providerLabel(p, endpoints)} />
                       </span>
-                      <div>
+                      <div className="ai-active-copy">
                         <strong>{providerLabel(p, endpoints)}</strong>
                         <p className={st.connected ? 'pill-on' : 'hint'}>{st.text}</p>
                       </div>
                     </div>
-                    <ModelField provider={p} settings={settings} catalog={catalogs[p]} onSaved={onSaved} />
+                    <div className="ai-fields">
+                      <ModelField provider={p} settings={settings} catalog={catalogs[p]} onSaved={onSaved} />
+                    </div>
                     {BUILTIN_AI_IDS.includes(p) && (
-                      <div className="row-btns">
+                      <div className="ai-actions">
                         {local[p]?.available && (
                           <div className="ai-local">
                             <button
@@ -3701,10 +3883,10 @@ function SettingsDialog({
                       </div>
                     )}
                     {PAID_AI_PROVIDERS.includes(p) && (
-                      <div className="row-btns">
+                      <div className="ai-key-row">
                         <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste API key" />
                         <button
-                          className="ghost"
+                          className="primary"
                           onClick={async () => {
                             await window.spoon.ai.saveApiKey(p, key)
                             setKey('')
@@ -3718,10 +3900,10 @@ function SettingsDialog({
                     {endpoint && (
                       <>
                         {endpoint.needsKey && (
-                          <div className="row-btns">
+                          <div className="ai-key-row">
                             <input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder="Paste API key" />
                             <button
-                              className="ghost"
+                              className="primary"
                               onClick={async () => {
                                 await window.spoon.ai.saveApiKey(p, key)
                                 setKey('')
@@ -3732,7 +3914,7 @@ function SettingsDialog({
                             </button>
                           </div>
                         )}
-                        <div className="row-btns">
+                        <div className="ai-actions">
                           {endpoint.consoleUrl && (
                             <button className="ghost" onClick={() => void window.spoon.ai.openConsole(p)}>
                               Get key
@@ -3760,20 +3942,20 @@ function SettingsDialog({
                     <span className="ai-mark">
                       <ProviderIcon id={siteAdding.id} label={siteAdding.label} />
                     </span>
-                    <div>
+                    <div className="ai-active-copy">
                       <strong>{siteAdding.label}</strong>
                       <p className="hint">{siteAdding.blurb}</p>
                     </div>
                   </div>
                   {siteAdding.needsKey && (
-                    <>
+                    <div className="ai-fields">
                       <label>API key</label>
                       <input type="password" value={addKey} onChange={(e) => setAddKey(e.target.value)} placeholder="Paste key" />
                       <label>Model</label>
                       <input value={addModel} spellCheck={false} onChange={(e) => setAddModel(e.target.value)} placeholder={siteAdding.defaultModel} />
-                    </>
+                    </div>
                   )}
-                  <div className="row-btns">
+                  <div className="ai-actions">
                     {siteAdding.consoleUrl && (
                       <button className="ghost" onClick={() => void window.spoon.ai.openConsole(siteAdding.id)}>
                         Get key
@@ -3791,8 +3973,10 @@ function SettingsDialog({
               )}
               {aiPick.type === 'custom' && (
                 <div className="ai-active">
-                  <h3>Custom endpoint</h3>
-                  <p className="hint">Any OpenAI-compatible base URL — LiteLLM, vLLM, a proxy, or a provider that is not listed.</p>
+                  <div className="ai-active-copy">
+                    <strong>Custom endpoint</strong>
+                    <p className="hint">Any OpenAI-compatible base URL — LiteLLM, vLLM, a proxy, or a provider that is not listed.</p>
+                  </div>
                   <div className="custom-grid">
                     <label>
                       Name
@@ -3811,7 +3995,7 @@ function SettingsDialog({
                       <input value={customModel} spellCheck={false} onChange={(e) => setCustomModel(e.target.value)} placeholder="gpt-4o-mini" />
                     </label>
                   </div>
-                  <div className="row-btns" style={{ marginTop: 10 }}>
+                  <div className="ai-actions">
                     <button className="primary" disabled={!customUrl.trim() || !!busyId} onClick={() => void addCustom()}>
                       Add custom API
                     </button>
@@ -3832,7 +4016,10 @@ function SettingsDialog({
         <section className="prefs-pane" role="tabpanel" id="prefs-panel-help" aria-labelledby="prefs-tab-help">
           <h3>Spoon{version ? ` ${version}` : ''}</h3>
           <p>Spoon is a Git client for Windows. Scan or clone repositories from Home, then fetch, pull, and commit from the toolbar.</p>
-          <p>AI message only fills the commit box. AI commit stays local unless you push yourself. If no provider is connected, those actions open Settings → AI.</p>
+          <p>
+            One AI button writes the message and, depending on Settings → AI, may also commit or push. Ctrl+Enter commits with your
+            message; Ctrl+Shift+Enter commits and pushes. If no provider is connected, the AI button opens Settings → AI.
+          </p>
           <h3>Guides</h3>
           <div className="row-btns" style={{ marginTop: 4 }}>
             <button
@@ -3885,7 +4072,7 @@ function ModelField({
   provider: AiProviderId
   settings: Settings | null
   catalog?: AiModelCatalog
-  onSaved: () => Promise<void>
+  onSaved: (next?: Settings) => Promise<void>
 }) {
   const saved = defaultModelFor(provider, settings)
   const choices = modelOptions(catalog, saved)
@@ -3897,10 +4084,10 @@ function ModelField({
   async function save(id: string) {
     const next = id.trim()
     if (!next) return
-    await window.spoon.app.patchSettings({
+    const s = await window.spoon.app.patchSettings({
       aiModels: { ...(settings?.aiModels ?? DEFAULT_AI_MODELS), [provider]: next }
     })
-    await onSaved()
+    await onSaved(s)
   }
 
   const name = providerLabel(provider, settings?.aiEndpoints)

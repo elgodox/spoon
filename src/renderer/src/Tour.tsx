@@ -34,7 +34,7 @@ const STEPS: TourStep[] = [
   {
     id: 'settings',
     title: 'Settings is one menu',
-    body: 'Appearance, Git, AI, and Help live in Settings. The left menu switches sections and can collapse. Theme is light or dark.',
+    body: 'Appearance packs (Classic, Colored, SpaceX), Git, AI, and Help live in Settings. Pick icon colors and accents from Appearance.',
     target: '[data-tour="prefs"]'
   }
 ]

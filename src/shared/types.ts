@@ -1,4 +1,7 @@
 export type ThemeMode = 'light' | 'dark'
+export type ThemePack = 'classic' | 'colored' | 'spacex'
+export type IconStyle = 'mono' | 'color'
+export type AccentId = 'blue' | 'violet' | 'red' | 'teal' | 'amber' | 'silver' | 'custom'
 
 export type AiProviderId = string
 
@@ -219,6 +222,10 @@ export type RepoSort = 'name' | 'opened' | 'changes' | 'behind' | 'ahead' | 'sta
 
 export interface Settings {
   theme: ThemeMode
+  themePack: ThemePack
+  iconStyle: IconStyle
+  accentId: AccentId
+  accentCustom?: string
   gitPath?: string
   fetchIntervalMin: number
   autoFetch: boolean

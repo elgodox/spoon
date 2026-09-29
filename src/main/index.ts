@@ -51,33 +51,54 @@ let fetchTimer: NodeJS.Timeout | null = null
 const WINDOWS_BUILD = process.platform === 'win32' ? Number(release().split('.')[2] ?? 0) : 0
 
 function effectiveMaterial(): WindowMaterial {
-  const s = store.getSettings()
-  if ((s.glass ?? 40) <= 0) return 'none'
-  // BrowserWindow materials need Windows 11 22H2 (build 22621); earlier builds would paint black.
-  if (WINDOWS_BUILD < 22621) return 'none'
-  return s.material ?? 'mica'
+  // Solid chrome only — frosted mica/acrylic was unreliable across themes.
+  return 'none'
 }
 
 function windowChrome() {
-  const dark = nativeTheme.shouldUseDarkColors
+  const s = store.getSettings()
+  const pack = s.themePack || 'classic'
+  const dark = pack === 'spacex' || s.theme === 'dark'
   const material = effectiveMaterial()
+  // Keep overlay + window fill locked to the same solid chrome the toolbar uses.
+  if (pack === 'spacex') {
+    return {
+      dark: true,
+      material,
+      background: '#000000',
+      bar: '#000000',
+      symbol: '#f4f4f5',
+      overlayHeight: 40
+    }
+  }
+  if (dark) {
+    return {
+      dark: true,
+      material,
+      background: '#1e1e1e',
+      bar: '#2d2d2d',
+      symbol: '#e8e8e8',
+      overlayHeight: 40
+    }
+  }
   return {
-    dark,
+    dark: false,
     material,
-    background: material !== 'none' ? '#00000000' : dark ? '#17171c' : '#f6f6f9',
-    bar: material !== 'none' ? '#00000000' : dark ? '#17171c' : '#f6f6f9',
-    symbol: dark ? '#f2f2f7' : '#1c1c22'
+    background: '#ffffff',
+    bar: '#f3f3f3',
+    symbol: '#1f1f1f',
+    overlayHeight: 40
   }
 }
 
 function chromeInfo() {
   const c = windowChrome()
-  return { dark: c.dark, material: c.material, build: WINDOWS_BUILD }
+  return { dark: c.dark, material: c.material, build: WINDOWS_BUILD, bar: c.bar, symbol: c.symbol }
 }
 
 function syncNativeTheme(): void {
-  const mode = store.getSettings().theme
-  const source = mode === 'dark' ? 'dark' : 'light'
+  const s = store.getSettings()
+  const source = s.themePack === 'spacex' || s.theme === 'dark' ? 'dark' : 'light'
   if (nativeTheme.themeSource !== source) nativeTheme.themeSource = source
   paintWindowChrome()
   send('theme:native', nativeTheme.shouldUseDarkColors)
@@ -89,11 +110,19 @@ function paintWindowChrome(): void {
   mainWindow.setBackgroundColor(colors.background)
   if (process.platform === 'win32') {
     try {
-      if (WINDOWS_BUILD >= 22621) mainWindow.setBackgroundMaterial(colors.material)
+      if (WINDOWS_BUILD >= 22621) mainWindow.setBackgroundMaterial('none')
     } catch {
       /* material not supported on this build */
     }
-    mainWindow.setTitleBarOverlay({ color: colors.bar, symbolColor: colors.symbol, height: 40 })
+    try {
+      mainWindow.setTitleBarOverlay({
+        color: colors.bar,
+        symbolColor: colors.symbol,
+        height: colors.overlayHeight
+      })
+    } catch {
+      /* overlay not available */
+    }
   }
   send('chrome', chromeInfo())
 }
@@ -114,7 +143,7 @@ function createWindow(): void {
     titleBarStyle: process.platform === 'win32' ? 'hidden' : 'default',
     titleBarOverlay:
       process.platform === 'win32'
-        ? { color: colors.bar, symbolColor: colors.symbol, height: 40 }
+        ? { color: colors.bar, symbolColor: colors.symbol, height: colors.overlayHeight }
         : undefined,
     icon: app.isPackaged
       ? join(process.resourcesPath, 'icon.png')
@@ -394,8 +423,10 @@ function buildMenu(): void {
         {
           label: 'AI',
           submenu: [
-            { label: 'Write Message', accelerator: 'Ctrl+Alt+M', click: () => sendMenu('ai-fill') },
-            { label: 'Commit', accelerator: 'Ctrl+Alt+Enter', click: () => sendMenu('ai-commit') },
+            { label: 'Run AI Button', accelerator: 'Ctrl+Alt+Enter', click: () => sendMenu('ai-primary') },
+            { type: 'separator' },
+            { label: 'Write Message Only', accelerator: 'Ctrl+Alt+M', click: () => sendMenu('ai-fill') },
+            { label: 'Commit Local', click: () => sendMenu('ai-commit') },
             { label: 'Commit & Push', accelerator: 'Ctrl+Alt+Shift+Enter', click: () => sendMenu('ai-commit-push') },
             { type: 'separator' },
             { label: 'Analyze Changes', accelerator: 'Ctrl+Alt+A', click: () => sendMenu('analyze') }
@@ -443,7 +474,7 @@ function registerIpc(): void {
   ipcMain.handle('app:settings', () => store.getSettings())
   ipcMain.handle('app:patchSettings', (_e, patch: Partial<Settings>) => {
     const settings = store.patchSettings(patch)
-    if (patch.theme !== undefined || patch.glass !== undefined || patch.material !== undefined) syncNativeTheme()
+    if (patch.theme !== undefined || patch.themePack !== undefined) syncNativeTheme()
     if (patch.autoFetch !== undefined || patch.fetchIntervalMin !== undefined || patch.autoFetchAll !== undefined) scheduleFetch()
     if (patch.autoUpdate !== undefined) updater.schedule(settings.autoUpdate)
     return settings
