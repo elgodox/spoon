@@ -1,4 +1,4 @@
-﻿import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+﻿import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type {
   ActivityItem,
@@ -21,6 +21,7 @@ import type {
   RebaseTodoItem,
   RepoStatus,
   RepoSummary,
+  RepoWorkspace,
   Settings,
   StashInfo,
   StatusEntry,
@@ -28,6 +29,7 @@ import type {
   UpdateState
 } from '../../shared/types'
 import { classifyMedia, formatBytes } from '../../shared/media'
+import { clusterGrouped, WORKSPACE_COLORS, workspaceColor } from '../../shared/workspaces'
 import { AI_SITE_CATALOG, customProviderId } from '../../shared/ai-catalog'
 import { ProviderIcon } from './ai-logos'
 import { AI_MODELS, BUILTIN_AI_IDS, DEFAULT_AI_MODELS, defaultModelFor, fallbackAiProvider, hasConnectedAi, listedProviderIds, PAID_AI_PROVIDERS, providerLabel, resolveAiProvider } from '../../shared/models'
@@ -52,6 +54,7 @@ import {
   IcoRefresh,
   IcoRemote,
   IcoSettings,
+  IcoWorkspaces,
   IcoSpoon,
   IcoStash,
   IcoTag,
@@ -71,6 +74,7 @@ import {
   initials,
   joinRepoPath,
   laneColor,
+  openMenu,
   parentDir
 } from './lib'
 
@@ -96,7 +100,14 @@ function snapThemeTransitions() {
   })
 }
 
-type Tab = { id: string; kind: 'manager' | 'repo'; path?: string; name: string }
+type Tab = {
+  id: string
+  kind: 'manager' | 'repo'
+  path?: string
+  name: string
+  workspaceId?: string
+  color?: string
+}
 type Snapshot = {
   status: RepoStatus
   commits: CommitInfo[]
@@ -145,18 +156,6 @@ type Overlay =
   | { type: 'device'; userCode: string; url: string }
   | { type: 'reflog' }
 
-let menuUnsub: (() => void) | null = null
-
-function openMenu(items: object[], onPick: (id: string) => void) {
-  void window.spoon.app.popup(items)
-  menuUnsub?.()
-  menuUnsub = window.spoon.app.on('menu:item', (id) => {
-    menuUnsub?.()
-    menuUnsub = null
-    onPick(String(id))
-  })
-}
-
 async function pushHead(path: string, snap?: Snapshot) {
   if (!snap) throw new Error('Repository is still loading.')
   if (snap.status.detached) throw new Error('Detached HEAD. Checkout a branch before pushing.')
@@ -182,6 +181,10 @@ export function App() {
     claude: { provider: 'claude', models: AI_MODELS.claude, live: false }
   })
   const [recent, setRecent] = useState<RepoSummary[]>([])
+  const [workspaces, setWorkspaces] = useState<RepoWorkspace[]>([])
+  const [drafts, setDrafts] = useState<RepoWorkspace[]>([])
+  const [manageWs, setManageWs] = useState(false)
+  const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
   const [snaps, setSnaps] = useState<Record<string, Snapshot>>({})
   const [busy, setBusy] = useState(false)
   const [overlay, setOverlay] = useState<Overlay>(null)
@@ -236,6 +239,7 @@ export function App() {
     setSidebarW(s.sidebarWidth || 220)
     applyTheme(s.theme)
     setRecent(await window.spoon.app.recent())
+    setWorkspaces((await window.spoon.app.workspaces()) as RepoWorkspace[])
     setAccounts(await window.spoon.ai.accounts())
     if (!s.onboarded) setTour(true)
     const chrome = (await window.spoon.app.chrome()) as { material?: string }
@@ -277,6 +281,67 @@ export function App() {
     } finally {
       setBusy(false)
     }
+  }, [])
+
+  const openRepos = useCallback(async (paths: string[], group?: RepoWorkspace) => {
+    const unique = [...new Set(paths)]
+    if (!unique.length) return
+    setBusy(true)
+    const opened: { path: string; name: string; id: string; snap: Snapshot }[] = []
+    const errors: string[] = []
+    for (const path of unique) {
+      try {
+        const snap = (await window.spoon.git.open(path)) as Snapshot
+        opened.push({
+          path,
+          name: snap.status.name,
+          id: `r-${Date.now().toString(36)}-${opened.length}`,
+          snap
+        })
+      } catch (e) {
+        errors.push(e instanceof Error ? e.message : String(e))
+      }
+    }
+    if (opened.length) {
+      setSnaps((m) => {
+        const next = { ...m }
+        for (const row of opened) next[row.path] = row.snap
+        return next
+      })
+      if (group?.id.startsWith('draft-')) setDrafts((ds) => [group, ...ds.filter((item) => item.id !== group.id)])
+      const known = tabsRef.current
+      const firstExisting = known.find((tab) => tab.path === opened[0].path)
+      setTabs((ts) => {
+        let next = opened.length && ts.length === 1 && ts[0].kind === 'manager' ? [] : ts
+        for (const row of opened) {
+          const hit = next.find((tab) => tab.path === row.path)
+          if (hit) {
+            if (group) {
+              next = next.map((tab) =>
+                tab.path === row.path ? { ...tab, name: row.name, workspaceId: group.id, color: group.color } : tab
+              )
+            }
+            continue
+          }
+          next = [
+            ...next,
+            {
+              id: row.id,
+              kind: 'repo' as const,
+              path: row.path,
+              name: row.name,
+              workspaceId: group?.id,
+              color: group?.color
+            }
+          ]
+        }
+        return clusterGrouped(next)
+      })
+      setActiveId(firstExisting?.id ?? opened[0].id)
+      setRecent(await window.spoon.app.recent())
+    }
+    if (errors.length) await window.spoon.app.error(errors[0])
+    setBusy(false)
   }, [])
 
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -422,9 +487,166 @@ export function App() {
         return [{ id: nid, kind: 'manager', name: 'New Tab' }]
       }
       if (id === activeId) setActiveId(next[next.length - 1].id)
-      return next
+      return clusterGrouped(next)
     })
   }
+
+  function openSelection(paths: string[]) {
+    if (!paths.length) return
+    void persistNewWorkspace(paths)
+  }
+
+  async function persistNewWorkspace(
+    paths: string[],
+    opts?: { name?: string; color?: string; id?: string; retagFrom?: string; open?: boolean }
+  ) {
+    const unique = [...new Set(paths)]
+    if (!unique.length) return
+    const color = opts?.color || workspaceColor(workspaces.length + drafts.length)
+    const name = (opts?.name || `Workspace ${workspaces.length + drafts.length + 1}`).trim()
+    try {
+      const result = (await window.spoon.app.saveWorkspace({
+        id: opts?.id,
+        name,
+        color,
+        repos: unique
+      })) as { workspaces: RepoWorkspace[]; saved: RepoWorkspace }
+      setWorkspaces(result.workspaces)
+      setDrafts((ds) => ds.filter((item) => item.id !== opts?.retagFrom && item.id !== result.saved.id))
+      if (opts?.open === false) {
+        setTabs((ts) =>
+          clusterGrouped(
+            ts.map((tab) => {
+              const inSet = !!tab.path && unique.some((path) => path.toLowerCase() === tab.path!.toLowerCase())
+              const inDraft = !!opts.retagFrom && tab.workspaceId === opts.retagFrom
+              if (!inSet && !inDraft) return tab
+              return { ...tab, workspaceId: result.saved.id, color: result.saved.color }
+            })
+          )
+        )
+        return
+      }
+      await openRepos(unique, result.saved)
+    } catch (e) {
+      await window.spoon.app.error(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  function paintTab(tabId: string, color: string | null) {
+    setTabMenu(null)
+    if (!color) {
+      setTabs((ts) =>
+        clusterGrouped(ts.map((tab) => (tab.id === tabId ? { ...tab, workspaceId: undefined, color: undefined } : tab)))
+      )
+      return
+    }
+    const current = tabsRef.current
+    const colorPeers = current.filter((tab) => tab.color === color && tab.path)
+    const existingId = colorPeers.map((tab) => tab.workspaceId).find((id) => id && !id.startsWith('draft-'))
+    const ws = existingId ? workspaces.find((item) => item.id === existingId) : undefined
+    const next = clusterGrouped(
+      current.map((tab) => (tab.id === tabId ? { ...tab, workspaceId: existingId, color } : tab))
+    )
+    setTabs(next)
+    const peers = next.filter((tab) => tab.color === color && tab.path)
+    if (peers.length < 2) return
+    void persistNewWorkspace(
+      peers.map((tab) => tab.path!),
+      {
+        id: ws?.id,
+        color,
+        name: ws?.name || `Workspace ${workspaces.length + 1}`,
+        retagFrom: existingId,
+        open: false
+      }
+    )
+  }
+
+  async function moveTabToWorkspace(tab: Tab, workspace: RepoWorkspace) {
+    if (!tab.path) return
+    setTabMenu(null)
+    const repos = workspace.repos.some((path) => path.toLowerCase() === tab.path!.toLowerCase())
+      ? workspace.repos
+      : [...workspace.repos, tab.path]
+    try {
+      const result = (await window.spoon.app.saveWorkspace({
+        id: workspace.id,
+        name: workspace.name,
+        color: workspace.color,
+        repos
+      })) as { workspaces: RepoWorkspace[]; saved: RepoWorkspace }
+      setWorkspaces(result.workspaces)
+      setTabs((ts) =>
+        clusterGrouped(
+          ts.map((item) =>
+            item.id === tab.id ? { ...item, workspaceId: result.saved.id, color: result.saved.color } : item
+          )
+        )
+      )
+    } catch (e) {
+      await window.spoon.app.error(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function addReposToWorkspace(workspace: RepoWorkspace, paths: string[]) {
+    const repos = [...workspace.repos]
+    for (const path of paths) {
+      if (!repos.some((item) => item.toLowerCase() === path.toLowerCase())) repos.push(path)
+    }
+    if (repos.length === workspace.repos.length) return
+    try {
+      const result = (await window.spoon.app.saveWorkspace({
+        id: workspace.id,
+        name: workspace.name,
+        color: workspace.color,
+        repos
+      })) as { workspaces: RepoWorkspace[]; saved: RepoWorkspace }
+      setWorkspaces(result.workspaces)
+    } catch (e) {
+      await window.spoon.app.error(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function updateWorkspace(workspace: RepoWorkspace, patch: { name?: string; color?: string }) {
+    const name = (patch.name ?? workspace.name).trim()
+    if (!name) return
+    const color = patch.color ?? workspace.color
+    try {
+      const result = (await window.spoon.app.saveWorkspace({
+        id: workspace.id,
+        name,
+        color,
+        repos: workspace.repos
+      })) as { workspaces: RepoWorkspace[]; saved: RepoWorkspace }
+      setWorkspaces(result.workspaces)
+      setTabs((ts) =>
+        ts.map((tab) => (tab.workspaceId === result.saved.id ? { ...tab, color: result.saved.color } : tab))
+      )
+    } catch (e) {
+      await window.spoon.app.error(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function removeWorkspace(id: string) {
+    const current = workspaces.find((item) => item.id === id)
+    const list = (await window.spoon.app.deleteWorkspace(id)) as RepoWorkspace[]
+    setWorkspaces(list)
+    setDrafts((ds) => ds.filter((item) => item.id !== id))
+    setTabs((ts) =>
+      clusterGrouped(
+        ts.map((tab) =>
+          tab.workspaceId === id ? { ...tab, workspaceId: undefined, color: tab.color || current?.color } : tab
+        )
+      )
+    )
+  }
+
+  const groupById = new Map<string, RepoWorkspace>()
+  for (const item of workspaces) groupById.set(item.id, item)
+  for (const item of drafts) if (!groupById.has(item.id)) groupById.set(item.id, item)
+  const activeGroup = active.workspaceId ? groupById.get(active.workspaceId) : undefined
+  const tabRuns = tabGroups(clusterGrouped(tabs))
+  const menuTab = tabMenu ? tabs.find((tab) => tab.id === tabMenu.tabId) : undefined
 
   const snap = active.path ? snaps[active.path] : undefined
   const glass = settings?.glass ?? 40
@@ -463,6 +685,10 @@ export function App() {
             <IcoLaunch />
             <span>Quick Launch</span>
           </button>
+          <button className="tb-btn" title="Manage workspaces" onClick={() => setManageWs(true)}>
+            <IcoWorkspaces />
+            <span>Workspaces</span>
+          </button>
           <button className="tb-btn" disabled={!active.path} onClick={() => void runRemote('fetch')}>
             <IcoFetch />
             <span>Fetch{snap?.status.behind ? '*' : ''}</span>
@@ -486,7 +712,14 @@ export function App() {
         </div>
         <div className="tb-group center">
           <div className="branch-chip">
-            <div className="repo">{active.kind === 'repo' ? active.name : 'Welcome to Spoon'}</div>
+            <div className="repo">
+              {active.kind === 'repo' ? active.name : 'Welcome to Spoon'}
+              {activeGroup ? (
+                <span className="ws-pill" style={{ ['--group' as string]: activeGroup.color }}>
+                  {activeGroup.name}
+                </span>
+              ) : null}
+            </div>
             <div className="br">
               {active.kind === 'repo' ? (
                 <>
@@ -537,28 +770,34 @@ export function App() {
       </div>
 
       <div className="tabs" data-tour="tabs" role="tablist">
-        {tabs.map((t) => {
-          const dirty =
-            !!t.path && !!snap && t.path === active.path && snap.status.unstagedCount + snap.status.stagedCount > 0
+        {tabRuns.map((run) => {
+          const head = run[0]
+          const ws = head.workspaceId ? groupById.get(head.workspaceId) : undefined
+          const color = head.color || ws?.color
+          const grouped = !!head.workspaceId || (!!head.color && run.length > 1)
+          const chips = run.map((tab) => (
+            <TabChip
+              key={tab.id}
+              tab={tab}
+              active={tab.id === activeId}
+              dirty={!!tab.path && !!snap && tab.path === active.path && snap.status.unstagedCount + snap.status.stagedCount > 0}
+              onFocus={() => setActiveId(tab.id)}
+              onClose={() => closeTab(tab.id)}
+              onMenu={(x, y) => setTabMenu({ tabId: tab.id, x, y })}
+            />
+          ))
+          if (!grouped) return <Fragment key={head.id}>{chips}</Fragment>
           return (
             <div
-              key={t.id}
-              className={`tab ${t.id === activeId ? 'active' : ''}`}
-              role="tab"
-              aria-selected={t.id === activeId}
+              key={head.workspaceId || `color-${head.color}`}
+              className="tab-group"
+              style={{ ['--group' as string]: color }}
             >
-              <button type="button" className="tab-hit" onClick={() => setActiveId(t.id)}>
-                <span className="name">{t.name}</span>
-                {dirty ? <span className="tab-dirty">*</span> : null}
-              </button>
-              <button
-                type="button"
-                className="x"
-                aria-label={`Close ${t.name}`}
-                onClick={() => closeTab(t.id)}
-              >
-                <IcoClose />
-              </button>
+              <span className="tab-group-label" title={ws?.name || 'Grouped by color'}>
+                <i />
+                {ws?.name}
+              </span>
+              {chips}
             </div>
           )
         })}
@@ -583,6 +822,12 @@ export function App() {
             onInit={() => setOverlay({ type: 'init' })}
             onAdd={() => void openExisting()}
             onRecent={setRecent}
+            workspaces={workspaces}
+            onOpenWorkspace={(ws) => void openRepos(ws.repos, ws)}
+            onOpenSelection={openSelection}
+            onSaveWorkspace={(repos) => void persistNewWorkspace(repos)}
+            onAddToWorkspace={(workspace, paths) => void addReposToWorkspace(workspace, paths)}
+            onDeleteWorkspace={(id) => void removeWorkspace(id)}
             onSettings={async (patch) => {
               const s = await window.spoon.app.patchSettings(patch)
               setSettings(s)
@@ -614,6 +859,29 @@ export function App() {
         )}
       </div>
 
+      {manageWs && (
+        <WorkspaceManager
+          workspaces={workspaces}
+          recent={recent}
+          onClose={() => setManageWs(false)}
+          onOpen={(ws) => {
+            setManageWs(false)
+            void openRepos(ws.repos, ws)
+          }}
+          onUpdate={(ws, patch) => void updateWorkspace(ws, patch)}
+          onDelete={(id) => void removeWorkspace(id)}
+        />
+      )}
+      {tabMenu && menuTab?.kind === 'repo' && (
+        <TabGroupMenu
+          x={tabMenu.x}
+          y={tabMenu.y}
+          workspaces={workspaces}
+          onClose={() => setTabMenu(null)}
+          onColor={(color) => paintTab(menuTab.id, color)}
+          onWorkspace={(ws) => void moveTabToWorkspace(menuTab, ws)}
+        />
+      )}
       {overlay && (
         <DialogHost
           overlay={overlay}
@@ -635,11 +903,16 @@ export function App() {
         <QuickLaunch
           tabs={tabs}
           recent={recent}
+          workspaces={workspaces}
           snap={snap}
           onClose={() => setQuick(false)}
           onOpen={(p, n) => {
             setQuick(false)
             void loadRepo(p, n)
+          }}
+          onOpenWorkspace={(ws) => {
+            setQuick(false)
+            void openRepos(ws.repos, ws)
           }}
           onAction={(a) => {
             setQuick(false)
@@ -3668,21 +3941,256 @@ function modelOptions(catalog: AiModelCatalog | undefined, selected: string): Ai
   return [{ id: selected, label: selected }, ...models]
 }
 
-function QuickLaunch({
+function tabGroups(tabs: Tab[]): Tab[][] {
+  const runs: Tab[][] = []
+  for (const tab of tabs) {
+    const key = tab.workspaceId ? `ws:${tab.workspaceId}` : tab.color ? `color:${tab.color}` : ''
+    const prev = runs[runs.length - 1]
+    const prevTab = prev?.[0]
+    const prevKey = prevTab?.workspaceId ? `ws:${prevTab.workspaceId}` : prevTab?.color ? `color:${prevTab.color}` : ''
+    if (key && prev && prevKey === key) prev.push(tab)
+    else runs.push([tab])
+  }
+  return runs
+}
+
+function TabChip({
+  tab,
+  active,
+  dirty,
+  onFocus,
+  onClose,
+  onMenu
+}: {
+  tab: Tab
+  active: boolean
+  dirty: boolean
+  onFocus: () => void
+  onClose: () => void
+  onMenu: (x: number, y: number) => void
+}) {
+  return (
+    <div
+      className={`tab ${active ? 'active' : ''}`}
+      role="tab"
+      aria-selected={active}
+      onContextMenu={(event) => {
+        if (tab.kind !== 'repo') return
+        event.preventDefault()
+        onMenu(event.clientX, event.clientY)
+      }}
+    >
+      <button type="button" className="tab-hit" title="Right-click to group by color or workspace" onClick={onFocus}>
+        {tab.color ? <i className="tab-dot" style={{ background: tab.color }} /> : null}
+        <span className="name">{tab.name}</span>
+        {dirty ? <span className="tab-dirty">*</span> : null}
+      </button>
+      <button type="button" className="x" aria-label={`Close ${tab.name}`} onClick={onClose}>
+        <IcoClose />
+      </button>
+    </div>
+  )
+}
+
+function TabGroupMenu({
+  x,
+  y,
+  workspaces,
+  onClose,
+  onColor,
+  onWorkspace
+}: {
+  x: number
+  y: number
+  workspaces: RepoWorkspace[]
+  onClose: () => void
+  onColor: (color: string | null) => void
+  onWorkspace: (workspace: RepoWorkspace) => void
+}) {
+  return (
+    <div className="tab-menu-back" onMouseDown={onClose}>
+      <div
+        className="tab-menu"
+        style={{ left: Math.max(8, Math.min(x, window.innerWidth - 220)), top: Math.max(8, Math.min(y, window.innerHeight - 220)) }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="tab-menu-label">Color</div>
+        <div className="swatches">
+          {WORKSPACE_COLORS.map((color) => (
+            <button key={color} type="button" className="swatch" style={{ background: color }} aria-label={color} onClick={() => onColor(color)} />
+          ))}
+        </div>
+        <button type="button" className="tab-menu-item" onClick={() => onColor(null)}>
+          Ungroup
+        </button>
+        <div className="tab-menu-label">Workspace</div>
+        {workspaces.length ? (
+          workspaces.map((workspace) => (
+            <button key={workspace.id} type="button" className="tab-menu-item" onClick={() => onWorkspace(workspace)}>
+              <i className="tab-dot" style={{ background: workspace.color }} />
+              {workspace.name}
+            </button>
+          ))
+        ) : (
+          <p className="hint">Save a workspace from Home first.</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function WorkspaceManager({
+  workspaces,
   recent,
   onClose,
   onOpen,
+  onUpdate,
+  onDelete
+}: {
+  workspaces: RepoWorkspace[]
+  recent: RepoSummary[]
+  onClose: () => void
+  onOpen: (workspace: RepoWorkspace) => void
+  onUpdate: (workspace: RepoWorkspace, patch: { name?: string; color?: string }) => void
+  onDelete: (id: string) => void
+}) {
+  const [editId, setEditId] = useState<string | null>(null)
+  const [name, setName] = useState('')
+  const [color, setColor] = useState<string>(WORKSPACE_COLORS[0])
+  const names = new Map(recent.map((repo) => [repo.path.toLowerCase(), repo.name]))
+
+  function startEdit(workspace: RepoWorkspace) {
+    setEditId(workspace.id)
+    setName(workspace.name)
+    setColor(workspace.color)
+  }
+
+  return (
+    <Modal title="Workspaces" onClose={onClose} wide>
+      {!workspaces.length ? (
+        <p className="hint">No saved workspaces yet. On Home, select repositories and choose Save.</p>
+      ) : (
+        <ul className="ws-admin">
+          {workspaces.map((workspace) => {
+            const editing = editId === workspace.id
+            const labels = workspace.repos.map((path) => names.get(path.toLowerCase()) || path.split(/[\\/]/).pop() || path)
+            return (
+              <li key={workspace.id}>
+                <span className="ws-dot" style={{ background: editing ? color : workspace.color }} />
+                <div className="ws-admin-copy">
+                  {editing ? (
+                    <>
+                      <input
+                        autoFocus
+                        value={name}
+                        aria-label="Workspace name"
+                        onChange={(event) => setName(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' && name.trim()) {
+                            onUpdate(workspace, { name, color })
+                            setEditId(null)
+                          }
+                          if (event.key === 'Escape') setEditId(null)
+                        }}
+                      />
+                      <div className="swatches">
+                        {WORKSPACE_COLORS.map((item) => (
+                          <button
+                            key={item}
+                            type="button"
+                            className={`swatch ${item === color ? 'on' : ''}`}
+                            style={{ background: item }}
+                            aria-label={item}
+                            aria-pressed={item === color}
+                            onClick={() => setColor(item)}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <strong>{workspace.name}</strong>
+                      <div className="hint" title={labels.join(', ')}>
+                        {labels.join(', ')}
+                      </div>
+                    </>
+                  )}
+                </div>
+                <div className="ws-admin-actions">
+                  {editing ? (
+                    <>
+                      <button
+                        type="button"
+                        className="ghost"
+                        disabled={!name.trim()}
+                        onClick={() => {
+                          onUpdate(workspace, { name, color })
+                          setEditId(null)
+                        }}
+                      >
+                        Save
+                      </button>
+                      <button type="button" className="ghost" onClick={() => setEditId(null)}>
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" className="ghost" onClick={() => onOpen(workspace)}>
+                        Open
+                      </button>
+                      <button type="button" className="ghost" onClick={() => startEdit(workspace)}>
+                        Rename
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost danger"
+                        onClick={() => {
+                          void window.spoon.app
+                            .confirm(`Delete workspace “${workspace.name}”?`, 'Repositories stay on disk and in the list.')
+                            .then((ok) => {
+                              if (ok) onDelete(workspace.id)
+                            })
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
+                </div>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </Modal>
+  )
+}
+
+function QuickLaunch({
+  recent,
+  workspaces,
+  onClose,
+  onOpen,
+  onOpenWorkspace,
   onAction
 }: {
   tabs: Tab[]
   recent: RepoSummary[]
+  workspaces: RepoWorkspace[]
   snap?: Snapshot
   onClose: () => void
   onOpen: (p: string, n?: string) => void
+  onOpenWorkspace: (workspace: RepoWorkspace) => void
   onAction: (a: string) => void
 }) {
   const [q, setQ] = useState('')
   const items = [
+    ...workspaces.map((workspace) => ({
+      id: workspace.id,
+      label: `Workspace ${workspace.name}`,
+      run: () => onOpenWorkspace(workspace)
+    })),
     ...recent.map((r) => ({ id: r.path, label: `Open ${r.name}`, run: () => onOpen(r.path, r.name) })),
     { id: 'fetch', label: 'Fetch', run: () => onAction('fetch') },
     { id: 'branch', label: 'New branch', run: () => onAction('branch') },
@@ -3715,5 +4223,3 @@ function QuickLaunch({
     </div>
   )
 }
-
-void menuUnsub

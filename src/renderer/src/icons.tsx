@@ -42,6 +42,19 @@ export const IcoLaunch = () => (
     <path d="M15.2 15.2L21 21" strokeWidth="2" />
   </S>
 )
+export const IcoWorkspaces = () => (
+  <S>
+    <rect x="3" y="8" width="12" height="11" rx="1.6" />
+    <path d="M8 8V5.6A1.6 1.6 0 0 1 9.6 4H19a1.6 1.6 0 0 1 1.6 1.6V14a1.6 1.6 0 0 1-1.6 1.6h-4" />
+  </S>
+)
+export const IcoSave = () => (
+  <S>
+    <path d="M5 4h11l3 3v13H5z" />
+    <path d="M8 4v5h7V4" />
+    <path d="M8 20v-6h8v6" />
+  </S>
+)
 export const IcoBranch = () => (
   <S>
     <circle cx="6" cy="6" r="2.2" />

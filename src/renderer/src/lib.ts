@@ -1,5 +1,17 @@
 import type { CommitInfo } from '../../shared/types'
 
+let menuUnsub: (() => void) | null = null
+
+export function openMenu(items: object[], onPick: (id: string) => void) {
+  void window.spoon.app.popup(items)
+  menuUnsub?.()
+  menuUnsub = window.spoon.app.on('menu:item', (id) => {
+    menuUnsub?.()
+    menuUnsub = null
+    onPick(String(id))
+  })
+}
+
 const LANE_COLORS = ['#e08a2a', '#3b82c4', '#3aaa4a', '#c44ab0', '#e05656', '#2aa8a8', '#8a6ad4', '#c48a2a']
 
 export function laneColor(lane: number): string {

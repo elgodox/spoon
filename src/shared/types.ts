@@ -36,6 +36,13 @@ export interface RepoSummary {
   folder?: string
 }
 
+export interface RepoWorkspace {
+  id: string
+  name: string
+  color: string
+  repos: string[]
+}
+
 export interface BranchInfo {
   name: string
   fullName: string

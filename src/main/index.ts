@@ -449,6 +449,12 @@ function registerIpc(): void {
     return settings
   })
   ipcMain.handle('app:recent', () => store.getRecent())
+  ipcMain.handle('app:workspaces', () => store.getWorkspaces())
+  ipcMain.handle(
+    'app:saveWorkspace',
+    (_e, input: { id?: string; name: string; color?: string; repos: string[] }) => store.saveWorkspace(input)
+  )
+  ipcMain.handle('app:deleteWorkspace', (_e, id: string) => store.deleteWorkspace(id))
   ipcMain.handle('app:removeRecent', (_e, path: string) => {
     const s = store.getSettings()
     if (s.pinned?.includes(path)) store.patchSettings({ pinned: s.pinned.filter((p) => p !== path) })
@@ -551,14 +557,16 @@ function registerIpc(): void {
     await dialog.showMessageBox(mainWindow!, { type: 'error', message })
   })
   ipcMain.handle('app:popup', (_e, items: Electron.MenuItemConstructorOptions[]) => {
-    const menu = Menu.buildFromTemplate(
-      items.map((it) => ({
-        ...it,
-        click: it.id
-          ? () => send('menu:item', it.id)
-          : undefined
-      }))
-    )
+    const wire = (rows: Electron.MenuItemConstructorOptions[]): Electron.MenuItemConstructorOptions[] =>
+      rows.map((item) => {
+        const submenu = Array.isArray(item.submenu) ? wire(item.submenu) : undefined
+        return {
+          ...item,
+          submenu,
+          click: item.id ? () => send('menu:item', item.id) : undefined
+        }
+      })
+    const menu = Menu.buildFromTemplate(wire(items))
     menu.popup({ window: mainWindow ?? undefined })
   })
 

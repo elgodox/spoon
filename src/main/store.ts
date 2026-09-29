@@ -2,7 +2,8 @@ import { app, nativeTheme, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DEFAULT_AI_MODELS, fallbackAiProvider } from '../shared/models'
-import type { AiProviderId, RepoSummary, Settings, ThemeMode } from '../shared/types'
+import type { AiProviderId, RepoSummary, RepoWorkspace, Settings, ThemeMode } from '../shared/types'
+import { normalizeWorkspaceColor, sanitizeWorkspaces, uniqueRepoPaths, workspaceColor } from '../shared/workspaces'
 
 export interface StoredAiCreds {
   provider: AiProviderId
@@ -20,6 +21,7 @@ interface StoreFile {
   settings: Settings
   recent: RepoSummary[]
   folders: { name: string; repos: string[] }[]
+  workspaces: RepoWorkspace[]
   creds: Record<string, string>
 }
 
@@ -92,6 +94,7 @@ function load(): StoreFile {
       },
       recent: parsed.recent ?? [],
       folders: parsed.folders ?? [],
+      workspaces: sanitizeWorkspaces(parsed.workspaces),
       creds: parsed.creds ?? {}
     }
     const migratedFree =
@@ -104,7 +107,7 @@ function load(): StoreFile {
       }
     }
   } catch {
-    cache = { settings: { ...defaults }, recent: [], folders: [], creds: {} }
+    cache = { settings: { ...defaults }, recent: [], folders: [], workspaces: [], creds: {} }
   }
   return cache
 }
@@ -176,6 +179,45 @@ export function setFolders(folders: { name: string; repos: string[] }[]): void {
   const data = load()
   data.folders = folders
   save(data)
+}
+
+export function getWorkspaces(): RepoWorkspace[] {
+  return load().workspaces
+}
+
+export function saveWorkspace(input: { id?: string; name: string; color?: string; repos: string[] }): {
+  workspaces: RepoWorkspace[]
+  saved: RepoWorkspace
+} {
+  const data = load()
+  const name = input.name.trim().slice(0, 80)
+  if (!name) throw new Error('Name the workspace.')
+  const repos = uniqueRepoPaths(input.repos)
+  if (!repos.length) throw new Error('A workspace needs a repository.')
+  const existing =
+    (input.id ? data.workspaces.find((item) => item.id === input.id) : undefined) ??
+    data.workspaces.find((item) => item.name.toLowerCase() === name.toLowerCase())
+  const color = input.color
+    ? normalizeWorkspaceColor(input.color, data.workspaces.length)
+    : existing?.color
+      ? normalizeWorkspaceColor(existing.color)
+      : workspaceColor(data.workspaces.length)
+  const saved: RepoWorkspace = {
+    id: existing?.id ?? `ws-${Date.now()}`,
+    name,
+    color,
+    repos
+  }
+  data.workspaces = [saved, ...data.workspaces.filter((item) => item.id !== saved.id)]
+  save(data)
+  return { workspaces: data.workspaces, saved }
+}
+
+export function deleteWorkspace(id: string): RepoWorkspace[] {
+  const data = load()
+  data.workspaces = data.workspaces.filter((item) => item.id !== id)
+  save(data)
+  return data.workspaces
 }
 
 export function saveCreds(creds: StoredAiCreds): void {

@@ -104,6 +104,10 @@ const api = {
     settings: () => ipcRenderer.invoke('app:settings'),
     patchSettings: (patch: object) => ipcRenderer.invoke('app:patchSettings', patch),
     recent: () => ipcRenderer.invoke('app:recent'),
+    workspaces: () => ipcRenderer.invoke('app:workspaces'),
+    saveWorkspace: (input: { id?: string; name: string; color?: string; repos: string[] }) =>
+      ipcRenderer.invoke('app:saveWorkspace', input),
+    deleteWorkspace: (id: string) => ipcRenderer.invoke('app:deleteWorkspace', id),
     removeRecent: (path: string) => ipcRenderer.invoke('app:removeRecent', path),
     activity: () => ipcRenderer.invoke('app:activity'),
     openExternal: (url: string) => ipcRenderer.invoke('app:openExternal', url),
