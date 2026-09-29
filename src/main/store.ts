@@ -236,6 +236,36 @@ export function deleteWorkspace(id: string): RepoWorkspace[] {
   return data.workspaces
 }
 
+export function saveWorkspaces(
+  inputs: { name: string; color?: string; repos: string[] }[]
+): { workspaces: RepoWorkspace[]; saved: RepoWorkspace[] } {
+  const data = load()
+  const saved: RepoWorkspace[] = []
+  for (const input of inputs) {
+    const name = input.name.trim().slice(0, 80)
+    if (!name) continue
+    const repos = uniqueRepoPaths(input.repos)
+    if (!repos.length) continue
+    const existing = data.workspaces.find((item) => item.name.toLowerCase() === name.toLowerCase())
+    const color = input.color
+      ? normalizeWorkspaceColor(input.color, data.workspaces.length + saved.length)
+      : existing?.color
+        ? normalizeWorkspaceColor(existing.color)
+        : workspaceColor(data.workspaces.length + saved.length)
+    const row: RepoWorkspace = {
+      id: existing?.id ?? `ws-${Date.now()}-${saved.length}`,
+      name,
+      color,
+      repos
+    }
+    data.workspaces = [row, ...data.workspaces.filter((item) => item.id !== row.id)]
+    saved.push(row)
+  }
+  if (!saved.length) throw new Error('Nothing to save.')
+  save(data)
+  return { workspaces: data.workspaces, saved }
+}
+
 export function saveCreds(creds: StoredAiCreds): void {
   const data = load()
   const json = JSON.stringify(creds)

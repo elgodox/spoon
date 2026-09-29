@@ -1,5 +1,6 @@
 import { findAiSite, openAiUrl } from '../shared/ai-catalog'
-import type { AiEndpointConfig, AiProviderId, ChangeAnalysis } from '../shared/types'
+import type { AiEndpointConfig, AiProviderId, ChangeAnalysis, RepoSummary, WorkspaceAnalysis } from '../shared/types'
+import { fallbackWorkspaceAnalysis, parseWorkspaceAnalysis } from '../shared/workspaces'
 import { fallbackAnalysis, parseAnalysis } from './analysis'
 import { changeBrief } from './git'
 import { providerLabel, resolveCreds } from './oauth'
@@ -22,6 +23,19 @@ Rules:
 - Do not invent paths.
 - Order commits so later ones can build on earlier ones.
 - Do not mention pushing or that you are an AI.`
+
+const WORKSPACE_SYSTEM = `You organize Git repositories into named workspaces for a desktop Git client.
+Return JSON only, with no markdown fences:
+{"summary":"short paragraph","workspaces":[{"name":"short label","repos":["exact/path or repo name"],"rationale":"one sentence"}]}
+Rules:
+- Group related repositories that a developer would open together (same product, monorepo siblings, client+api, shared folder, matching name prefixes).
+- Prefer 2–8 repositories per workspace when possible.
+- A repository may appear in at most one workspace.
+- Use exact paths from the list when possible; repo names are allowed when unique.
+- Do not invent repositories that are not listed.
+- Name workspaces clearly (product, team, or folder theme), max 40 characters.
+- Skip lonely repositories unless every repo is alone.
+- Do not mention that you are an AI.`
 
 export async function generateCommitMessage(
   provider: AiProviderId,
@@ -52,6 +66,34 @@ export async function analyzeRepository(provider: AiProviderId, cwd: string, mod
     return parseAnalysis(text, known)
   } catch (error) {
     const fallback = fallbackAnalysis(files)
+    const reason = error instanceof Error ? error.message : String(error)
+    return {
+      ...fallback,
+      summary: `${fallback.summary} AI grouping was not used (${reason}).`
+    }
+  }
+}
+
+export async function analyzeWorkspaces(
+  provider: AiProviderId,
+  repos: Pick<RepoSummary, 'path' | 'name'>[],
+  model?: string
+): Promise<WorkspaceAnalysis> {
+  if (repos.length < 2) throw new Error('Add at least two repositories before analyzing workspaces.')
+  const listing = repos
+    .slice(0, 200)
+    .map((repo) => {
+      const parent = repo.path.replace(/\\/g, '/').replace(/\/[^/]+$/, '') || repo.path
+      return `- ${repo.name} | ${repo.path} | folder: ${parent.split('/').pop() || parent}`
+    })
+    .join('\n')
+  const clipped = listing.length > 20_000 ? listing.slice(0, 20_000) + '\n\n[truncated]' : listing
+  const user = `Group these repositories into workspaces a developer would open together.\n\n${clipped}`
+  try {
+    const text = await complete(provider, user, WORKSPACE_SYSTEM, 1800, model)
+    return parseWorkspaceAnalysis(text, repos)
+  } catch (error) {
+    const fallback = fallbackWorkspaceAnalysis(repos)
     const reason = error instanceof Error ? error.message : String(error)
     return {
       ...fallback,

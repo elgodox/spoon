@@ -96,6 +96,8 @@ const api = {
       ipcRenderer.invoke('ai:generate', provider, diff, extra, model),
     analyze: (repo: string, provider: string, model?: string) =>
       ipcRenderer.invoke('ai:analyze', repo, provider, model),
+    analyzeWorkspaces: (provider: string, model?: string) =>
+      ipcRenderer.invoke('ai:analyzeWorkspaces', provider, model),
     models: (provider: string, force?: boolean) => ipcRenderer.invoke('ai:models', provider, force),
     addEndpoint: (endpoint: object, apiKey?: string) => ipcRenderer.invoke('ai:addEndpoint', endpoint, apiKey),
     removeEndpoint: (id: string) => ipcRenderer.invoke('ai:removeEndpoint', id)
@@ -107,6 +109,8 @@ const api = {
     workspaces: () => ipcRenderer.invoke('app:workspaces'),
     saveWorkspace: (input: { id?: string; name: string; color?: string; repos: string[] }) =>
       ipcRenderer.invoke('app:saveWorkspace', input),
+    saveWorkspaces: (inputs: { name: string; color?: string; repos: string[] }[]) =>
+      ipcRenderer.invoke('app:saveWorkspaces', inputs),
     deleteWorkspace: (id: string) => ipcRenderer.invoke('app:deleteWorkspace', id),
     removeRecent: (path: string) => ipcRenderer.invoke('app:removeRecent', path),
     activity: () => ipcRenderer.invoke('app:activity'),

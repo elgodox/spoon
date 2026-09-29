@@ -1,4 +1,4 @@
-import type { RepoWorkspace } from './types'
+import type { RepoWorkspace, WorkspaceAnalysis, WorkspaceSuggestion } from './types'
 
 export const WORKSPACE_COLORS = [
   '#4c8dff',
@@ -19,6 +19,18 @@ export function workspaceColor(index: number): string {
 export function normalizeWorkspaceColor(color: unknown, index = 0): string {
   if (typeof color === 'string' && /^#[0-9a-fA-F]{6}$/.test(color)) return color.toLowerCase()
   return workspaceColor(index)
+}
+
+export function parentDir(path: string): string {
+  const norm = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const i = norm.lastIndexOf('/')
+  return i > 0 ? norm.slice(0, i) : norm
+}
+
+export function folderLabel(path: string): string {
+  const parent = parentDir(path)
+  const parts = parent.split('/').filter(Boolean)
+  return parts[parts.length - 1] || 'Projects'
 }
 
 export function groupKey(tab: { id: string; workspaceId?: string; color?: string }): string {
@@ -80,4 +92,109 @@ export function sanitizeWorkspaces(raw: unknown): RepoWorkspace[] {
     })
   }
   return out
+}
+
+export function parseWorkspaceAnalysis(
+  text: string,
+  knownRepos: { path: string; name: string }[]
+): WorkspaceAnalysis {
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```$/i, '').trim()
+  const start = cleaned.indexOf('{')
+  const end = cleaned.lastIndexOf('}')
+  if (start < 0 || end <= start) throw new Error('The workspace analysis was not JSON.')
+  const data = JSON.parse(cleaned.slice(start, end + 1)) as {
+    summary?: string
+    workspaces?: { name?: string; repos?: unknown; rationale?: string }[]
+  }
+  const byPath = new Map(knownRepos.map((repo) => [repo.path.toLowerCase(), repo.path]))
+  const byName = new Map<string, string[]>()
+  for (const repo of knownRepos) {
+    const key = repo.name.toLowerCase()
+    const list = byName.get(key) ?? []
+    list.push(repo.path)
+    byName.set(key, list)
+  }
+  const used = new Set<string>()
+  const workspaces: WorkspaceSuggestion[] = []
+  for (const item of data.workspaces ?? []) {
+    const name = (item.name ?? '').trim().slice(0, 80)
+    if (!name) continue
+    const repos = resolveRepoRefs(item.repos, byPath, byName).filter((path) => {
+      const key = path.toLowerCase()
+      if (used.has(key)) return false
+      used.add(key)
+      return true
+    })
+    if (repos.length < 1) continue
+    workspaces.push({
+      name,
+      repos,
+      rationale: (item.rationale ?? '').trim()
+    })
+  }
+  if (!workspaces.length) throw new Error('The analysis did not name any workspaces.')
+  return {
+    summary: (data.summary ?? '').trim() || `${workspaces.length} suggested workspace${workspaces.length === 1 ? '' : 's'}.`,
+    workspaces
+  }
+}
+
+export function fallbackWorkspaceAnalysis(repos: { path: string; name: string }[]): WorkspaceAnalysis {
+  if (!repos.length) throw new Error('Add repositories before analyzing workspaces.')
+  const groups = new Map<string, string[]>()
+  for (const repo of repos) {
+    const key = parentDir(repo.path).toLowerCase()
+    const list = groups.get(key) ?? []
+    list.push(repo.path)
+    groups.set(key, list)
+  }
+  const workspaces: WorkspaceSuggestion[] = [...groups.entries()].map(([, paths]) => {
+    const label = folderLabel(paths[0])
+    const multi = paths.length > 1
+    return {
+      name: multi ? label : repos.find((repo) => repo.path === paths[0])?.name || label,
+      repos: paths,
+      rationale: multi
+        ? `Repositories under the same folder (${label}).`
+        : 'Single repository; kept as its own workspace.'
+    }
+  })
+  // Prefer multi-repo groups first, then singles
+  workspaces.sort((a, b) => b.repos.length - a.repos.length || a.name.localeCompare(b.name))
+  // Drop solitary leftovers when there is at least one real group of 2+
+  const clustered = workspaces.filter((item) => item.repos.length > 1)
+  const chosen = clustered.length ? clustered : workspaces
+  return {
+    summary: `${repos.length} repositor${repos.length === 1 ? 'y' : 'ies'} grouped into ${chosen.length} workspace${chosen.length === 1 ? '' : 's'} by folder.`,
+    workspaces: chosen
+  }
+}
+
+function resolveRepoRefs(
+  value: unknown,
+  byPath: Map<string, string>,
+  byName: Map<string, string[]>
+): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !item.trim()) continue
+    const raw = item.trim()
+    const byExact = byPath.get(raw.toLowerCase())
+    if (byExact) {
+      out.push(byExact)
+      continue
+    }
+    const names = byName.get(raw.toLowerCase())
+    if (names?.length === 1) {
+      out.push(names[0])
+      continue
+    }
+    const leaf = raw.replace(/\\/g, '/').split('/').pop()?.toLowerCase()
+    if (leaf) {
+      const named = byName.get(leaf)
+      if (named?.length === 1) out.push(named[0])
+    }
+  }
+  return uniqueRepoPaths(out)
 }

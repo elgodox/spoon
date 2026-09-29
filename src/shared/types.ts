@@ -46,6 +46,17 @@ export interface RepoWorkspace {
   repos: string[]
 }
 
+export interface WorkspaceSuggestion {
+  name: string
+  repos: string[]
+  rationale: string
+}
+
+export interface WorkspaceAnalysis {
+  summary: string
+  workspaces: WorkspaceSuggestion[]
+}
+
 export interface BranchInfo {
   name: string
   fullName: string

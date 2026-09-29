@@ -26,7 +26,9 @@ import type {
   StashInfo,
   StatusEntry,
   TagInfo,
-  UpdateState
+  UpdateState,
+  WorkspaceAnalysis,
+  WorkspaceSuggestion
 } from '../../shared/types'
 import { classifyMedia, formatBytes } from '../../shared/media'
 import { clusterGrouped, WORKSPACE_COLORS, workspaceColor } from '../../shared/workspaces'
@@ -82,10 +84,13 @@ import {
   formatDate,
   initials,
   joinRepoPath,
+  branchLeafName,
+  groupByPathPrefix,
   laneColor,
   laneGlow,
   openMenu,
-  parentDir
+  parentDir,
+  parseReflogSubject
 } from './lib'
 
 type PrefsTab = 'look' | 'git' | 'ai' | 'help'
@@ -905,6 +910,8 @@ export function App() {
         <WorkspaceManager
           workspaces={workspaces}
           recent={recent}
+          settings={settings}
+          accounts={accounts}
           onClose={() => setManageWs(false)}
           onOpen={(ws) => {
             setManageWs(false)
@@ -912,6 +919,11 @@ export function App() {
           }}
           onUpdate={(ws, patch) => void updateWorkspace(ws, patch)}
           onDelete={(id) => void removeWorkspace(id)}
+          onWorkspaces={setWorkspaces}
+          onOpenAiSettings={() => {
+            setManageWs(false)
+            setOverlay({ type: 'settings', tab: 'ai' })
+          }}
         />
       )}
       {tabMenu && menuTab?.kind === 'repo' && (
@@ -1277,6 +1289,7 @@ function Workspace({
   const [commit, setCommit] = useState<CommitInfo | null>(snap.commits[0] ?? null)
   const [detailTab, setDetailTab] = useState<'commit' | 'changes' | 'tree'>('commit')
   const [filter, setFilter] = useState('')
+  const [sideCollapsed, setSideCollapsed] = useState<Set<string>>(() => new Set())
   const [focusBranch, setFocusBranch] = useState<string | null>(null)
   const [pulseKey, setPulseKey] = useState(0)
   const [pulseHashes, setPulseHashes] = useState<string[]>([])
@@ -1674,10 +1687,74 @@ function Workspace({
     list.push(b)
     map.set(remote, list)
     return map
-  }, new Map<string, BranchInfo[]>())]
+  }, new Map<string, BranchInfo[]>())].sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }))
   const groupedRemotes = new Set(remoteGroups.map(([name]) => name))
   for (const remote of snap.remotes) {
     if (!groupedRemotes.has(remote.name)) remoteGroups.push([remote.name, []])
+  }
+  const filtering = !!q
+  const sideOpen = (id: string) => filtering || !sideCollapsed.has(id)
+  const toggleSide = (id: string) => {
+    if (filtering) return
+    setSideCollapsed((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  const localVisible = local.filter((b) => match(b.name))
+  const localTree = groupByPathPrefix(localVisible, (b) => b.name)
+  const sortBranches = (list: BranchInfo[]) =>
+    list.slice().sort((a, b) => Number(b.current) - Number(a.current) || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+
+  function renderLocalBranch(b: BranchInfo, deep = false) {
+    return (
+      <div
+        key={b.fullName}
+        className={`side-item ${deep ? 'deep' : ''} ${(sel.kind === 'branch' && sel.name === b.name) || focusBranch === b.name ? 'active' : ''}`}
+        onClick={() => clickLocalBranch(b)}
+        onDoubleClick={() => void window.spoon.git.checkout(path, b.name).then(onReload)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          branchCtx(b)
+        }}
+      >
+        {b.current ? <span className="dot-check">*</span> : <IcoBranch />}
+        <span className="label">{deep ? branchLeafName(b.name) : b.name}</span>
+        {b.upstream ? (
+          <span className="track" title={`Tracks ${b.upstream}`}>
+            {b.upstream.includes('/') ? b.upstream.slice(b.upstream.indexOf('/') + 1) : b.upstream}
+          </span>
+        ) : null}
+        {b.ahead || b.behind ? (
+          <span className="ahead">
+            {b.ahead ? `↑${b.ahead}` : ''}
+            {b.ahead && b.behind ? ' ' : ''}
+            {b.behind ? `↓${b.behind}` : ''}
+          </span>
+        ) : null}
+      </div>
+    )
+  }
+
+  function renderRemoteBranch(b: BranchInfo, remote: string, short: string, deep = false) {
+    const leaf = deep ? branchLeafName(short) : short
+    return (
+      <div
+        key={b.fullName}
+        className={`side-item indent ${deep ? 'deep' : ''} ${(sel.kind === 'remote' && sel.name === b.name) || focusBranch === b.name ? 'active' : ''}`}
+        onClick={() => clickRemoteBranch(b)}
+        onDoubleClick={() => void window.spoon.git.checkout(path, short, true).then(onReload)}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          remoteCtx(remote)
+        }}
+      >
+        <IcoBranch />
+        <span className="label">{leaf}</span>
+      </div>
+    )
   }
 
   async function openSubmodule(rel: string, status: string) {
@@ -1729,7 +1806,8 @@ function Workspace({
             </>
           )}
           <div
-            className="side-sec"
+            className={`side-sec toggle ${sideOpen('local') ? 'open' : ''}`}
+            onClick={() => toggleSide('local')}
             onContextMenu={(e) => {
               e.preventDefault()
               openMenu([{ id: 'new', label: 'New branch...' }], (id) => {
@@ -1737,34 +1815,52 @@ function Workspace({
               })
             }}
           >
-            Local branches
-            <button className="sec-add" title="New branch" onClick={() => onOverlay({ type: 'branch' })}>
+            <span className="ico chev" aria-hidden>
+              <IcoChevron />
+            </span>
+            Local
+            <span className="sec-count">{localVisible.length}</span>
+            <button
+              className="sec-add"
+              title="New branch"
+              onClick={(e) => {
+                e.stopPropagation()
+                onOverlay({ type: 'branch' })
+              }}
+            >
               +
             </button>
           </div>
-          {local.filter((b) => match(b.name)).map((b) => (
-            <div
-              key={b.fullName}
-              className={`side-item ${(sel.kind === 'branch' && sel.name === b.name) || focusBranch === b.name ? 'active' : ''}`}
-              onClick={() => clickLocalBranch(b)}
-              onDoubleClick={() => void window.spoon.git.checkout(path, b.name).then(onReload)}
-              onContextMenu={(e) => {
-                e.preventDefault()
-                branchCtx(b)
-              }}
-            >
-              {b.current ? <span className="dot-check">*</span> : <IcoBranch />}
-              <span className="label">{b.name}</span>
-              {b.ahead || b.behind ? (
-                <span className="ahead">
-                  {b.ahead ? `^${b.ahead}` : ''} {b.behind ? `v${b.behind}` : ''}
-                </span>
-              ) : null}
-            </div>
-          ))}
-          {!local.length && <div className="empty">No local branches</div>}
+          {sideOpen('local') && (
+            <>
+              {sortBranches(localTree.roots).map((b) => renderLocalBranch(b))}
+              {localTree.folders.map((folder) => {
+                const fid = `local:${folder.key}`
+                const items = sortBranches(folder.items)
+                return (
+                  <Fragment key={fid}>
+                    <div
+                      className={`side-folder ${sideOpen(fid) ? 'open' : ''}`}
+                      onClick={() => toggleSide(fid)}
+                    >
+                      <span className="ico chev" aria-hidden>
+                        <IcoChevron />
+                      </span>
+                      <span className="label">{folder.key}</span>
+                      <span className="sec-count">{items.length}</span>
+                    </div>
+                    {sideOpen(fid) && items.map((b) => renderLocalBranch(b, true))}
+                  </Fragment>
+                )
+              })}
+              {!localVisible.length && (
+                <div className="side-empty">{filtering ? 'No matching branches' : 'No local branches'}</div>
+              )}
+            </>
+          )}
           <div
-            className="side-sec"
+            className={`side-sec toggle ${sideOpen('remotes') ? 'open' : ''}`}
+            onClick={() => toggleSide('remotes')}
             onContextMenu={(e) => {
               e.preventDefault()
               openMenu([{ id: 'add', label: 'Add remote...' }], (id) => {
@@ -1772,53 +1868,103 @@ function Workspace({
               })
             }}
           >
-            Remote branches
-            <button className="sec-add" title="Add remote" onClick={() => onOverlay({ type: 'remote' })}>
+            <span className="ico chev" aria-hidden>
+              <IcoChevron />
+            </span>
+            Remotes
+            <span className="sec-count">
+              {remoteGroups.reduce((n, [, branches]) => n + branches.filter((b) => match(b.name)).length, 0)}
+            </span>
+            <button
+              className="sec-add"
+              title="Add remote"
+              onClick={(e) => {
+                e.stopPropagation()
+                onOverlay({ type: 'remote' })
+              }}
+            >
               +
             </button>
           </div>
-          {remoteGroups.length ? (
-            remoteGroups.map(([remote, branches]) => (
-              <div key={remote}>
-                <div
-                  className="side-sec sub"
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    remoteCtx(remote)
-                  }}
-                >
-                  <IcoRemote /> {remote}
-                </div>
-                {branches.filter((b) => match(b.name)).map((b) => {
-                  const short = b.name.includes('/') ? b.name.slice(b.name.indexOf('/') + 1) : b.name
-                  return (
+          {sideOpen('remotes') &&
+            (remoteGroups.length ? (
+              remoteGroups.map(([remote, branches]) => {
+                const visible = branches
+                  .filter((b) => match(b.name))
+                  .slice()
+                  .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+                if (filtering && !visible.length) return null
+                const rid = `remote:${remote}`
+                const shortOf = (b: BranchInfo) => (b.name.includes('/') ? b.name.slice(b.name.indexOf('/') + 1) : b.name)
+                const tree = groupByPathPrefix(visible, shortOf)
+                return (
+                  <div key={remote} className="side-remote-block">
                     <div
-                      key={b.fullName}
-                      className={`side-item indent ${(sel.kind === 'remote' && sel.name === b.name) || focusBranch === b.name ? 'active' : ''}`}
-                      onClick={() => clickRemoteBranch(b)}
-                      onDoubleClick={() => void window.spoon.git.checkout(path, short, true).then(onReload)}
+                      className={`side-sec sub toggle ${sideOpen(rid) ? 'open' : ''}`}
+                      onClick={() => toggleSide(rid)}
                       onContextMenu={(e) => {
                         e.preventDefault()
                         remoteCtx(remote)
                       }}
                     >
-                      <IcoBranch />
-                      <span className="label">{short}</span>
+                      <span className="ico chev" aria-hidden>
+                        <IcoChevron />
+                      </span>
+                      <IcoRemote />
+                      <span className="label">{remote}</span>
+                      <span className="sec-count">{visible.length}</span>
                     </div>
-                  )
-                })}
+                    {sideOpen(rid) && (
+                      <>
+                        {tree.roots.map((b) => renderRemoteBranch(b, remote, shortOf(b)))}
+                        {tree.folders.map((folder) => {
+                          const fid = `${rid}:${folder.key}`
+                          return (
+                            <Fragment key={fid}>
+                              <div
+                                className={`side-folder indent ${sideOpen(fid) ? 'open' : ''}`}
+                                onClick={() => toggleSide(fid)}
+                              >
+                                <span className="ico chev" aria-hidden>
+                                  <IcoChevron />
+                                </span>
+                                <span className="label">{folder.key}</span>
+                                <span className="sec-count">{folder.items.length}</span>
+                              </div>
+                              {sideOpen(fid) &&
+                                folder.items.map((b) => renderRemoteBranch(b, remote, shortOf(b), true))}
+                            </Fragment>
+                          )
+                        })}
+                        {!visible.length && <div className="side-empty">No branches yet</div>}
+                      </>
+                    )}
+                  </div>
+                )
+              })
+            ) : (
+              <div className="side-empty">Fetch to see remote branches</div>
+            ))}
+          <div
+            className={`side-sec toggle ${sideOpen('tags') ? 'open' : ''}`}
+            onClick={() => toggleSide('tags')}
+          >
+            <span className="ico chev" aria-hidden>
+              <IcoChevron />
+            </span>
+            Tags
+            <span className="sec-count">{snap.tags.filter((t) => match(t.name)).length}</span>
+          </div>
+          {sideOpen('tags') &&
+            snap.tags.filter((t) => match(t.name)).map((t) => (
+              <div key={t.name} className="side-item" onClick={() => setSel({ kind: 'tag', name: t.name })}>
+                <IcoTag />
+                <span className="label">{t.name}</span>
               </div>
-            ))
-          ) : (
-            <div className="empty">Fetch to see remote branches</div>
+            ))}
+          {sideOpen('tags') && !snap.tags.filter((t) => match(t.name)).length && (
+            <div className="side-empty">No tags</div>
           )}
-          <div className="side-sec">Tags</div>
-          {snap.tags.filter((t) => match(t.name)).map((t) => (
-            <div key={t.name} className="side-item" onClick={() => setSel({ kind: 'tag', name: t.name })}>
-              <IcoTag />
-              <span className="label">{t.name}</span>
-            </div>
-          ))}
           <div className="side-sec">Stashes</div>
           {snap.stashes.map((s) => (
             <div
@@ -3187,14 +3333,22 @@ function ReflogDialog({ path, onClose }: { path: string; onClose: () => void }) 
     void window.spoon.git.reflog(path).then((c) => setCommits(c as CommitInfo[]))
   }, [path])
   return (
-    <Modal title="Reflog" onClose={onClose}>
-      <div style={{ maxHeight: 420, overflow: 'auto' }}>
-        {commits.map((c) => (
-          <div key={c.hash + c.subject} className="commit-row" style={{ gridTemplateColumns: '1fr 90px' }}>
-            <span>{c.subject}</span>
-            <span className="meta">{c.shortHash}</span>
-          </div>
-        ))}
+    <Modal title="Reflog" wide onClose={onClose}>
+      <div className="reflog-list">
+        {commits.length === 0 && <div className="side-empty">No reflog entries</div>}
+        {commits.map((c, i) => {
+          const p = parseReflogSubject(c.subject)
+          return (
+            <div key={`${c.hash}-${i}`} className="reflog-row" title={c.subject}>
+              <span className="reflog-sel">{p.selector || `HEAD@{${i}}`}</span>
+              <span className={`reflog-act ${p.action ? '' : 'empty'}`.trim()}>{p.action || '—'}</span>
+              <span className="reflog-msg">{p.detail || c.subject}</span>
+              <span className="reflog-hash" title={c.hash}>
+                {c.shortHash}
+              </span>
+            </div>
+          )
+        })}
       </div>
       <div className="dialog-foot">
         <button className="primary" onClick={onClose}>
@@ -4242,22 +4396,37 @@ function TabGroupMenu({
 function WorkspaceManager({
   workspaces,
   recent,
+  settings,
+  accounts,
   onClose,
   onOpen,
   onUpdate,
-  onDelete
+  onDelete,
+  onWorkspaces,
+  onOpenAiSettings
 }: {
   workspaces: RepoWorkspace[]
   recent: RepoSummary[]
+  settings: Settings | null
+  accounts: AiAccount[]
   onClose: () => void
   onOpen: (workspace: RepoWorkspace) => void
   onUpdate: (workspace: RepoWorkspace, patch: { name?: string; color?: string }) => void
   onDelete: (id: string) => void
+  onWorkspaces: (workspaces: RepoWorkspace[]) => void
+  onOpenAiSettings: () => void
 }) {
   const [editId, setEditId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [color, setColor] = useState<string>(WORKSPACE_COLORS[0])
+  const [aiBusy, setAiBusy] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [draft, setDraft] = useState<(WorkspaceSuggestion & { include: boolean; color: string })[] | null>(null)
+  const [draftSummary, setDraftSummary] = useState('')
   const names = new Map(recent.map((repo) => [repo.path.toLowerCase(), repo.name]))
+  const provider = fallbackAiProvider(settings?.aiProvider)
+  const model = settings?.aiModels?.[provider]
+  const aiConnected = accounts.some((account) => account.provider === provider && account.connected)
 
   function startEdit(workspace: RepoWorkspace) {
     setEditId(workspace.id)
@@ -4265,11 +4434,122 @@ function WorkspaceManager({
     setColor(workspace.color)
   }
 
+  async function runAiAnalyze() {
+    if (recent.length < 2) {
+      setAiError('Add at least two repositories first.')
+      return
+    }
+    if (!aiConnected) {
+      onOpenAiSettings()
+      return
+    }
+    setAiBusy(true)
+    setAiError(null)
+    try {
+      const result = (await window.spoon.ai.analyzeWorkspaces(provider, model)) as WorkspaceAnalysis
+      setDraftSummary(result.summary)
+      setDraft(
+        result.workspaces.map((item, index) => ({
+          ...item,
+          include: true,
+          color: workspaceColor(workspaces.length + index)
+        }))
+      )
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : String(error))
+      setDraft(null)
+    }
+    setAiBusy(false)
+  }
+
+  async function persistDraft() {
+    if (!draft) return
+    const chosen = draft.filter((item) => item.include && item.name.trim() && item.repos.length)
+    if (!chosen.length) return
+    setAiBusy(true)
+    setAiError(null)
+    try {
+      const result = (await window.spoon.app.saveWorkspaces(
+        chosen.map((item) => ({ name: item.name.trim(), color: item.color, repos: item.repos }))
+      )) as { workspaces: RepoWorkspace[]; saved: RepoWorkspace[] }
+      onWorkspaces(result.workspaces)
+      setDraft(null)
+      setDraftSummary('')
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : String(error))
+    }
+    setAiBusy(false)
+  }
+
   return (
     <Modal title="Workspaces" onClose={onClose} wide>
-      {!workspaces.length ? (
-        <p className="hint">No saved workspaces yet. On Home, select repositories and choose Save.</p>
-      ) : (
+      <div className="ws-ai-bar">
+        <div className="ws-ai-copy">
+          <strong>AI workspaces</strong>
+          <div className="hint">
+            Analyze your repository list and save related groups. Saved workspaces stay in Spoon memory.
+          </div>
+        </div>
+        <button
+          type="button"
+          className="primary ico-text"
+          disabled={aiBusy || recent.length < 2}
+          onClick={() => void runAiAnalyze()}
+        >
+          <IcoAi />
+          {aiBusy && !draft ? 'Analyzing…' : aiConnected ? 'Analyze with AI' : 'Connect AI'}
+        </button>
+      </div>
+      {aiError && <p className="hint danger-text">{aiError}</p>}
+      {draft && (
+        <div className="ws-ai-draft">
+          <p className="hint">{draftSummary}</p>
+          <ul className="ws-admin">
+            {draft.map((item, index) => {
+              const labels = item.repos.map((path) => names.get(path.toLowerCase()) || path.split(/[\\/]/).pop() || path)
+              return (
+                <li key={`${item.name}-${index}`}>
+                  <label className="ws-ai-check">
+                    <input
+                      type="checkbox"
+                      checked={item.include}
+                      onChange={() =>
+                        setDraft((prev) =>
+                          prev?.map((row, i) => (i === index ? { ...row, include: !row.include } : row)) ?? null
+                        )
+                      }
+                    />
+                    <span className="ws-dot" style={{ background: item.color }} />
+                    <div className="ws-admin-copy">
+                      <strong>{item.name}</strong>
+                      <div className="hint" title={labels.join(', ')}>
+                        {labels.join(', ')}
+                      </div>
+                      {item.rationale && <div className="hint">{item.rationale}</div>}
+                    </div>
+                  </label>
+                </li>
+              )
+            })}
+          </ul>
+          <div className="ws-ai-actions">
+            <button type="button" className="ghost" disabled={aiBusy} onClick={() => setDraft(null)}>
+              Discard
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={aiBusy || !draft.some((item) => item.include)}
+              onClick={() => void persistDraft()}
+            >
+              {aiBusy ? 'Saving…' : 'Save to memory'}
+            </button>
+          </div>
+        </div>
+      )}
+      {!workspaces.length && !draft ? (
+        <p className="hint">No saved workspaces yet. Select repositories on Home and choose Save, or analyze with AI.</p>
+      ) : workspaces.length > 0 ? (
         <ul className="ws-admin">
           {workspaces.map((workspace) => {
             const editing = editId === workspace.id
@@ -4362,7 +4642,7 @@ function WorkspaceManager({
             )
           })}
         </ul>
-      )}
+      ) : null}
     </Modal>
   )
 }

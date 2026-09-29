@@ -28,6 +28,42 @@ export function laneGlow(lane: number, alpha = 0.22): string {
   return `rgba(${r},${g},${b},${alpha})`
 }
 
+export function parseReflogSubject(subject: string): { selector: string; action: string; detail: string } {
+  const m = subject.match(/^(HEAD@\{\d+\}):\s*(.*)$/)
+  if (!m) return { selector: '', action: '', detail: subject }
+  const rest = m[2]
+  const am = rest.match(/^([A-Za-z][\w-]*):\s*(.*)$/)
+  if (am) return { selector: m[1], action: am[1], detail: am[2] }
+  return { selector: m[1], action: '', detail: rest }
+}
+
+export function branchLeafName(name: string): string {
+  const i = name.indexOf('/')
+  return i >= 0 ? name.slice(i + 1) : name
+}
+
+/** Group `feat/foo` under folder `feat`; bare names stay at the root. */
+export function groupByPathPrefix<T>(items: T[], nameOf: (item: T) => string): { roots: T[]; folders: { key: string; items: T[] }[] } {
+  const folderMap = new Map<string, T[]>()
+  const roots: T[] = []
+  for (const item of items) {
+    const name = nameOf(item)
+    const i = name.indexOf('/')
+    if (i <= 0) {
+      roots.push(item)
+      continue
+    }
+    const key = name.slice(0, i)
+    const list = folderMap.get(key) ?? []
+    list.push(item)
+    folderMap.set(key, list)
+  }
+  const folders = [...folderMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0], undefined, { sensitivity: 'base' }))
+    .map(([key, group]) => ({ key, items: group }))
+  return { roots, folders }
+}
+
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean)
   if (!parts.length) return '?'

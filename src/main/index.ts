@@ -31,7 +31,7 @@ import * as git from './git'
 import * as store from './store'
 import * as oauth from './oauth'
 import * as updater from './updater'
-import { analyzeRepository, generateCommitMessage } from './ai'
+import { analyzeRepository, analyzeWorkspaces, generateCommitMessage } from './ai'
 import { listProviderModels } from './model-catalog'
 
 app.commandLine.appendSwitch('disable-gpu-sandbox')
@@ -486,6 +486,10 @@ function registerIpc(): void {
     (_e, input: { id?: string; name: string; color?: string; repos: string[] }) => store.saveWorkspace(input)
   )
   ipcMain.handle('app:deleteWorkspace', (_e, id: string) => store.deleteWorkspace(id))
+  ipcMain.handle(
+    'app:saveWorkspaces',
+    (_e, inputs: { name: string; color?: string; repos: string[] }[]) => store.saveWorkspaces(inputs)
+  )
   ipcMain.handle('app:removeRecent', (_e, path: string) => {
     const s = store.getSettings()
     if (s.pinned?.includes(path)) store.patchSettings({ pinned: s.pinned.filter((p) => p !== path) })
@@ -753,6 +757,9 @@ function registerIpc(): void {
   )
   ipcMain.handle('ai:analyze', (_e, repo: string, provider: AiProviderId, model?: string) =>
     analyzeRepository(provider, repo, model)
+  )
+  ipcMain.handle('ai:analyzeWorkspaces', (_e, provider: AiProviderId, model?: string) =>
+    analyzeWorkspaces(provider, store.getRecent(), model)
   )
   ipcMain.handle('ai:models', (_e, provider: AiProviderId, force?: boolean) => listProviderModels(provider, !!force))
   ipcMain.handle('ai:addEndpoint', (_e, endpoint: AiEndpointConfig, apiKey?: string) => oauth.addEndpoint(endpoint, apiKey))
