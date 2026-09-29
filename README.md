@@ -30,7 +30,7 @@ Layout is familiar: repo tabs, a refs sidebar, a commit graph, a changes view, a
 
 **Requirements:** Windows 10 or 11 (x64) and [Git for Windows](https://git-scm.com/download/win).
 
-1. Download **Spoon-Setup-1.2.2.exe** from the [latest release](https://github.com/elgodox/spoon/releases/latest).
+1. Download the installer from the [latest release](https://github.com/elgodox/spoon/releases/latest).
 2. Run the installer. You can pick the folder; it creates Start Menu and desktop shortcuts.
 3. If Windows SmartScreen appears, choose **More info → Run anyway**. The installer is not code-signed.
 
@@ -142,7 +142,7 @@ Windows installer:
 npm run pack
 ```
 
-Output: `dist/Spoon-Setup-1.2.2.exe`.
+Output: `dist/Spoon-Setup-<version>.exe`.
 
 ## Git operations
 
