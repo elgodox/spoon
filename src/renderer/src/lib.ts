@@ -40,7 +40,7 @@ export function openWithMenuItems(
   return items
 }
 
-const LANE_COLORS = ['#f0a03a', '#4b9de0', '#3fbf5a', '#d65cc4', '#ef5f5f', '#2bbbbb', '#9a78e8', '#d9a03a']
+const LANE_COLORS = ['#b18aff', '#67a8ff', '#f18cde', '#56d7c0', '#f3ba72', '#9295ff', '#ff879b', '#b5cf77']
 
 export function laneColor(lane: number): string {
   return LANE_COLORS[Math.abs(lane) % LANE_COLORS.length]

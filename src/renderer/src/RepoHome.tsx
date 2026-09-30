@@ -1,8 +1,11 @@
+import { Button } from './Button'
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import type { BulkResult, RepoHealth, RepoIssue, RepoOverview, RepoSort, RepoSummary, RepoWorkspace, Settings } from '../../shared/types'
 import type { LauncherInfo } from '../../shared/launchers'
 import {
   IcoAddRepo,
+  IcoAi,
+  IcoBranch,
   IcoChevron,
   IcoClone,
   IcoCode,
@@ -108,6 +111,10 @@ export function RepoHome({
 
   const current = recent.find((r) => r.path === sel)
   const overview = sel ? overviews[sel] : undefined
+
+  useEffect(() => {
+    if (!recent.some((repo) => repo.path === sel)) setSel(recent[0]?.path)
+  }, [recent, sel])
 
   const markAnalyzing = useCallback((paths: string[], on: boolean) => {
     setAnalyzing((prev) => {
@@ -498,7 +505,7 @@ export function RepoHome({
                   {workspace.name}
                 </span>
                 <span className="counter">{workspace.repos.length}</span>
-                <button
+                <Button
                   type="button"
                   className="icon-x"
                   aria-label={`Delete ${workspace.name}`}
@@ -512,7 +519,7 @@ export function RepoHome({
                   }}
                 >
                   ×
-                </button>
+                </Button>
               </div>
             ))}
           </>
@@ -520,17 +527,17 @@ export function RepoHome({
         <div className="side-sec">
           Repositories
           <span className="counter">{filtered.length}</span>
-          <button
+          <Button
             className="ghost tiny"
             title="Select all visible"
             onClick={() => setPicked(filtered.map((r) => r.path))}
           >
             all
-          </button>
+          </Button>
           {picked.length > 0 && (
-            <button className="ghost tiny" title="Clear selection" onClick={() => setPicked([])}>
+            <Button className="ghost tiny" title="Clear selection" onClick={() => setPicked([])}>
               none
-            </button>
+            </Button>
           )}
         </div>
         {filtered.map((r) => {
@@ -541,6 +548,9 @@ export function RepoHome({
             <div
               key={r.path}
               className={`side-item repo-row ${sel === r.path ? 'active' : ''} ${on ? 'picked' : ''}`}
+              title={r.path}
+              role="button" tabIndex={0}
+              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSel(r.path); setPicked([]) } }}
               onClick={(e) => clickRepo(e, r.path)}
               onDoubleClick={() => onOpen(r.path, r.name)}
               onContextMenu={(event) => {
@@ -573,13 +583,32 @@ export function RepoHome({
         }
       />
       <div className="mgr-main">
+        <section className="flow-hero">
+          <div className="flow-hero-copy">
+            <span className="eyebrow"><IcoAi /> A LITTLE LESS REPETITION</span>
+            <h1>More time for<br /><span>your next idea.</span></h1>
+            <p>Your repositories, branches and AI.<br />One place to keep your code moving.</p>
+            <Button className="primary ico-text" onClick={onAdd}><IcoAddRepo /> Add a repository <span aria-hidden="true">↗</span></Button>
+          </div>
+          <div className="flow-art" aria-hidden="true">
+            <svg viewBox="0 0 380 190" className="flow-wires">
+              <path d="M74 48H140Q162 48 162 70V94H216M74 140H140Q162 140 162 118V94M244 94H300Q322 94 322 116V145" />
+              <circle cx="162" cy="94" r="5" /><circle cx="322" cy="145" r="5" />
+            </svg>
+            <div className="flow-folder folder-one"><IcoOpen /><span>app</span><i /></div>
+            <div className="flow-folder folder-two"><IcoOpen /><span>web</span><i /></div>
+            <div className="flow-spark"><IcoAi /></div>
+            <div className="flow-branch"><IcoBranch /><span>main</span><div className="mini-graph"><i /><i /><i /></div><div className="mini-lines"><i /><i /><i /></div></div>
+          </div>
+        </section>
         <header className="mgr-head">
           <div className="mgr-title">
             <div className="spoon-mark" aria-hidden>
               <SpoonMark />
             </div>
             <div className="mgr-title-copy">
-              <h1>Repository Manager</h1>
+              <span className="eyebrow">YOUR WORKSPACE</span>
+              <h2>Repositories</h2>
               <div className="stat-row" role="toolbar" aria-label="Filter repositories by status">
                 <StatChip
                   id="all"
@@ -714,10 +743,10 @@ export function RepoHome({
                 </div>
               </div>
               <div className="repo-actions">
-                <button className="primary ico-text" type="button" onClick={() => onOpenSelection(picked)}>
+                <Button className="primary ico-text" type="button" onClick={() => onOpenSelection(picked)}>
                   <IcoWorkspaces />
                   Open workspace
-                </button>
+                </Button>
                 <div className="repo-act-group" role="toolbar" aria-label="Sync selected">
                   <IconAct bare label="Fetch" hint="Fetch selected" disabled={!!busy} onClick={() => void runBulk('fetch')}>
                     <IcoFetch />
@@ -773,9 +802,9 @@ export function RepoHome({
                 const checking = analyzing.has(path) || !overviews[path]
                 return (
                   <li key={path}>
-                    <button className="linkish" onClick={() => setSel(path)}>
+                    <Button className="linkish" onClick={() => setSel(path)}>
                       {repo?.name ?? path}
-                    </button>
+                    </Button>
                     <RepoBadges overview={overviews[path]} compact analyzing={checking} />
                   </li>
                 )
@@ -798,7 +827,7 @@ export function RepoHome({
                     {current.path}
                   </div>
                   <div className="repo-meta">
-                    <span className="branch-pill">
+                    <span className="branch-pill" title={overview?.branch}><IcoBranch />
                       {overview?.branch ? (overview.detached ? 'detached HEAD' : overview.branch) : '...'}
                     </span>
                     {overview?.lastCommit && (
@@ -811,14 +840,14 @@ export function RepoHome({
                 </div>
               </div>
               <div className="repo-actions">
-                <button
+                <Button
                   className="primary ico-text"
                   type="button"
                   onClick={() => onOpen(current.path, current.name)}
                 >
                   <IcoHome />
                   Open
-                </button>
+                </Button>
                 <div className="repo-act-group" role="toolbar" aria-label="Open repository externally">
                   <IconAct
                     bare
@@ -919,7 +948,7 @@ function StatChip({
   const empty = id !== 'all' && count === 0
   const toneClass = tone && (count > 0 || active) ? ` ${tone}` : ''
   return (
-    <button
+    <Button
       type="button"
       className={`stat-pill${toneClass}${active ? ' on' : ''}`}
       aria-pressed={active}
@@ -929,7 +958,7 @@ function StatChip({
       onClick={() => onClick(id)}
     >
       <b>{count}</b> {label}
-    </button>
+    </Button>
   )
 }
 
@@ -986,7 +1015,7 @@ function SortMenu({ value, onChange }: { value: RepoSort; onChange: (value: Repo
 
   return (
     <div className={`menu-select${open ? ' open' : ''}`} ref={wrapRef}>
-      <button
+      <Button
         ref={btnRef}
         type="button"
         className="menu-select-btn"
@@ -1010,12 +1039,12 @@ function SortMenu({ value, onChange }: { value: RepoSort; onChange: (value: Repo
       >
         <span>{current.label}</span>
         <IcoChevron />
-      </button>
+      </Button>
       {open && (
         <ul id="repo-sort-list" className="menu-select-list" role="listbox" aria-label="Sort repositories">
           {SORT_OPTIONS.map((o) => (
             <li key={o.value} role="presentation">
-              <button
+              <Button
                 type="button"
                 role="option"
                 aria-selected={o.value === value}
@@ -1024,7 +1053,7 @@ function SortMenu({ value, onChange }: { value: RepoSort; onChange: (value: Repo
                 onClick={() => pick(o.value)}
               >
                 {o.label}
-              </button>
+              </Button>
             </li>
           ))}
         </ul>
@@ -1058,7 +1087,7 @@ function IconAct({
 }) {
   const name = hint ?? label
   return (
-    <button
+    <Button
       type="button"
       className={`ico-act${bare ? ' bare' : ''}${danger ? ' danger' : ''}${busy ? ' busy' : ''}${pressed ? ' on' : ''}`}
       title={name}
@@ -1073,7 +1102,7 @@ function IconAct({
         {children}
       </span>
       {bare ? null : <span>{label}</span>}
-    </button>
+    </Button>
   )
 }
 
@@ -1115,9 +1144,9 @@ function HealthList({
             <p>{issue.detail}</p>
           </div>
           {issue.fix && (
-            <button className={`ghost ${issue.fix.destructive ? 'danger' : ''}`} onClick={() => onFix(issue.fix!.id)}>
+            <Button className={`ghost ${issue.fix.destructive ? 'danger' : ''}`} onClick={() => onFix(issue.fix!.id)}>
               {issue.fix.label}
-            </button>
+            </Button>
           )}
         </div>
       ))}
@@ -1136,9 +1165,9 @@ function BulkSummary({ results, onClear }: { results: BulkResult[]; onClear: () 
           {ok} done - {skip} skipped - {fail} failed
         </b>
       </div>
-      <button className="ghost" onClick={onClear}>
+      <Button className="ghost" onClick={onClear}>
         Dismiss
-      </button>
+      </Button>
       {fail > 0 && (
         <ul>
           {results
@@ -1349,13 +1378,13 @@ export function HealthDialog({
           />
           <div className="dialog-foot">
             {onOpen && (
-              <button className="ghost" onClick={() => onOpen(path)}>
+              <Button className="ghost" onClick={() => onOpen(path)}>
                 Open repo
-              </button>
+              </Button>
             )}
-            <button className="primary" onClick={onClose}>
+            <Button className="primary" onClick={onClose}>
               Close
-            </button>
+            </Button>
           </div>
         </div>
       </div>

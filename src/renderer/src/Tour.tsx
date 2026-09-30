@@ -1,3 +1,4 @@
+import { Button } from './Button'
 import { useEffect, useState } from 'react'
 
 export type TourStep = {
@@ -34,7 +35,7 @@ const STEPS: TourStep[] = [
   {
     id: 'settings',
     title: 'Settings is one menu',
-    body: 'Appearance packs (Classic, Colored, SpaceX), Git, AI, and Help live in Settings. Pick icon colors and accents from Appearance.',
+    body: 'The new Spoon look, Classic, Colored and SpaceX live in Appearance. Settings also brings together Git, AI and Help.',
     target: '[data-tour="prefs"]'
   }
 ]
@@ -82,15 +83,15 @@ export function Tour({
         <h2 id="tour-title">{current.title}</h2>
         <p>{current.body}</p>
         <div className="tour-foot">
-          <button className="ghost" onClick={onClose}>
+          <Button className="ghost" onClick={onClose}>
             Skip
-          </button>
+          </Button>
           {step > 0 && (
-            <button className="ghost" onClick={() => setStep((s) => s - 1)}>
+            <Button className="ghost" onClick={() => setStep((s) => s - 1)}>
               Back
-            </button>
+            </Button>
           )}
-          <button
+          <Button
             className="primary"
             onClick={() => {
               if (last) onClose()
@@ -98,7 +99,7 @@ export function Tour({
             }}
           >
             {last ? 'Start using Spoon' : 'Next'}
-          </button>
+          </Button>
         </div>
       </div>
     </div>

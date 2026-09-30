@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
 import { shell } from 'electron'
 import {
   LAUNCHER_CATALOG,
@@ -9,6 +10,7 @@ import {
   type LauncherSpec
 } from '../shared/launchers'
 import { getSettings } from './store'
+import { runCommand } from './command'
 
 const whichCache = new Map<string, Promise<boolean>>()
 
@@ -68,8 +70,34 @@ export async function openWith(path: string, launcherId?: string): Promise<strin
   if ('available' in launcher && !launcher.available) {
     throw new Error(`${launcher.label} is not installed or not on PATH.`)
   }
-  const command = ('command' in launcher ? launcher.command : undefined) || launcher.bins[0]
+  const command = ('command' in launcher && typeof launcher.command === 'string' ? launcher.command : undefined) || launcher.bins[0]
   return launch(path, launcher, command)
+}
+
+export async function openFileAt(repo: string, file: string, line = 1, launcherId?: string): Promise<string> {
+  if (!existsSync(file)) throw new Error('This file no longer exists in the working tree. Use Show in Explorer to open its folder.')
+  const { launchers, defaultId } = await listLaunchers()
+  const editors = launchers.filter((item) => item.kind === 'ide' && item.available)
+  const editor = launcherId ? editors.find((item) => item.id === launcherId) : editors.find((item) => item.id === defaultId) ?? editors[0]
+  if (!editor?.command) throw new Error('No supported editor is installed. Configure an editor in Settings → Open with.')
+  const target = `${file}:${Math.max(1, Math.floor(line))}:1`
+  const args = editor.id === 'zed' ? [target] : ['--goto', target]
+  const targetCommand = await editorExecutable(editor.command)
+  await runCommand(targetCommand.bin, targetCommand.cli ? [targetCommand.cli, ...args] : args, { cwd: repo, timeout: 30_000, env: targetCommand.cli ? { ELECTRON_RUN_AS_NODE: '1', VSCODE_DEV: '' } : undefined })
+  return editor.label
+}
+
+async function editorExecutable(command: string): Promise<{ bin: string; cli?: string }> {
+  const file = await new Promise<string>((resolve, reject) => execFile('where.exe', [command], { windowsHide: true }, (error, stdout) => error ? reject(error) : resolve(stdout.trim().split(/\r?\n/)[0])))
+  if (!/\.(cmd|bat)$/i.test(file)) return { bin: file }
+  const shim = readFileSync(file, 'utf8')
+  const relative = shim.match(/"%~dp0([^"\r\n]+\.exe)"/i)?.[1]
+  const bin = relative && resolve(dirname(file), relative)
+  if (!bin || !existsSync(bin)) throw new Error('The editor launcher could not be resolved. Reinstall its command-line launcher.')
+  const cliPath = shim.match(/"%~dp0([^"\r\n]+cli\.js)"/i)?.[1]
+  const cli = cliPath && resolve(dirname(file), cliPath)
+  if (cli && !existsSync(cli)) throw new Error('The editor command-line script is missing. Reinstall its launcher.')
+  return { bin, cli }
 }
 
 async function launch(path: string, spec: LauncherSpec, command?: string): Promise<string> {

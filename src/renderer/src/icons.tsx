@@ -3,7 +3,7 @@ import type { ReactNode, SVGProps } from 'react'
 function S(props: SVGProps<SVGSVGElement> & { children: ReactNode }) {
   const { children, ...rest } = props
   return (
-    <svg viewBox="0 0 24 24" className="icon-svg ico" {...rest}>
+    <svg viewBox="0 0 24 24" className="icon-svg ico" aria-hidden="true" {...rest}>
       {children}
     </svg>
   )
@@ -87,7 +87,8 @@ export const IcoHome = () => (
 )
 export const IcoAi = () => (
   <S>
-    <path d="M12 3l1.5 5.5L19 10l-5.5 1.5L12 17l-1.5-5.5L5 10l5.5-1.5z" />
+    <path d="M10 4l2.1 6.1L18 12l-5.9 2L10 20l-2-6-6-2 6-1.9z" fill="currentColor" stroke="none" />
+    <path d="M19 2l1 3 3 1-3 1-1 3-1-3-3-1 3-1z" fill="currentColor" stroke="none" />
   </S>
 )
 export const IcoTag = () => (
@@ -109,9 +110,9 @@ export const IcoChanges = () => (
 )
 export const IcoSpoon = () => (
   <S>
-    <ellipse cx="8.2" cy="8.2" rx="4.6" ry="5.8" />
-    <path d="M10.6 12.2c2.6 2.7 6.4 6.8 8.9 9.1" strokeWidth="2.15" />
-    <ellipse cx="7.3" cy="8.5" rx="2.2" ry="3.3" />
+    <ellipse cx="8.6" cy="8.1" rx="5" ry="6" transform="rotate(-35 8.6 8.1)" fill="currentColor" stroke="none" />
+    <path d="M11.7 12.3L20 21" strokeWidth="2.8" />
+    <path d="M6 6c-1.5 2-.8 4 .5 5" stroke="var(--accent)" strokeWidth="1.3" opacity=".45" />
   </S>
 )
 export const IcoHealth = () => (

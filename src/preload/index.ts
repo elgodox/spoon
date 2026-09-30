@@ -60,6 +60,8 @@ const api = {
     preview: (path: string, file: string, opts?: { rev?: string; origPath?: string }) =>
       ipcRenderer.invoke('git:preview', path, file, opts),
     openFile: (path: string, file: string) => ipcRenderer.invoke('git:openFile', path, file),
+    openFileAt: (path: string, file: string, line?: number, launcherId?: string, staged?: boolean) => ipcRenderer.invoke('git:openFileAt', path, file, line, launcherId, staged),
+    revealFile: (path: string, file: string) => ipcRenderer.invoke('git:revealFile', path, file),
     reflog: (path: string) => ipcRenderer.invoke('git:reflog', path),
     readConflict: (path: string, file: string) => ipcRenderer.invoke('git:readConflict', path, file),
     writeResolved: (path: string, file: string, content: string) =>
@@ -101,6 +103,14 @@ const api = {
     models: (provider: string, force?: boolean) => ipcRenderer.invoke('ai:models', provider, force),
     addEndpoint: (endpoint: object, apiKey?: string) => ipcRenderer.invoke('ai:addEndpoint', endpoint, apiKey),
     removeEndpoint: (id: string) => ipcRenderer.invoke('ai:removeEndpoint', id)
+  },
+  profile: {
+    identity: (path?: string) => ipcRenderer.invoke('profile:identity', path),
+    pick: () => ipcRenderer.invoke('profile:pick'),
+    export: (data: string) => ipcRenderer.invoke('profile:export', data),
+    generators: (force?: boolean) => ipcRenderer.invoke('profile:generators', force),
+    generate: (id: string, description: string) => ipcRenderer.invoke('profile:generate', id, description),
+    cancel: () => ipcRenderer.invoke('profile:cancel')
   },
   app: {
     settings: () => ipcRenderer.invoke('app:settings'),

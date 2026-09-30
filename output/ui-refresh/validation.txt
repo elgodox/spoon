@@ -1,0 +1,13 @@
+Validación del refresh de Spoon
+
+OK: compilación de producción.
+OK: comprobación de tipos de la interfaz.
+OK: pruebas existentes de temas y distribución del gráfico.
+OK: renderizado del gráfico con más de 12 columnas, commits raíz, merges con múltiples padres y búsquedas sin conexiones falsas.
+OK: app Electron real con perfil y repositorio temporales: migración del tema, selección de ramas, búsqueda, teclado, repositorios, cambios, preferencias, modo claro y movimiento reducido. Sin errores de la interfaz.
+OK: ventana mínima de 980 × 620: historial visible, controles de la barra accesibles y acción de commit dentro de la ventana.
+OK: contraste de los pares principales de texto y botones (4.84:1 o superior).
+
+Limitación previa: la comprobación de tipos del proceso principal falla en src/main/launchers.ts:72 (un valor inferido como {} se pasa donde se espera string). Este archivo no fue modificado; la compilación de producción sí pasa.
+
+Las capturas utilizan un repositorio de prueba local.

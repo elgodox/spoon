@@ -1,3 +1,4 @@
+import { Button } from './Button'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { AboutInfo, UpdateState } from '../../shared/types'
 import { IcoClose, IcoHelp, IcoRefresh } from './icons'
@@ -161,9 +162,9 @@ export function AboutDialog({ onClose, onHelp }: { onClose: () => void; onHelp: 
       >
         <div className="about-hero">
           <SpoonBanner />
-          <button type="button" className="about-close" aria-label="Close" onClick={onClose}>
+          <Button type="button" className="about-close" aria-label="Close" onClick={onClose}>
             <IcoClose />
-          </button>
+          </Button>
         </div>
         <div className="about-body">
           <header className="about-brand">
@@ -172,7 +173,7 @@ export function AboutDialog({ onClose, onHelp }: { onClose: () => void; onHelp: 
             <p className="about-ver">{version ? `Version ${version}` : 'Loading version…'}</p>
           </header>
           <div className="about-actions">
-            <button
+            <Button
               type="button"
               className="primary ico-text"
               disabled={busy}
@@ -181,11 +182,11 @@ export function AboutDialog({ onClose, onHelp }: { onClose: () => void; onHelp: 
             >
               <IcoRefresh />
               <span>{action.label}</span>
-            </button>
-            <button type="button" className="ghost ico-text" onClick={onHelp}>
+            </Button>
+            <Button type="button" className="ghost ico-text" onClick={onHelp}>
               <IcoHelp />
               <span>Help</span>
-            </button>
+            </Button>
           </div>
           <p className="about-status" role="status">
             {action.detail}
@@ -223,13 +224,13 @@ export function AboutDialog({ onClose, onHelp }: { onClose: () => void; onHelp: 
               <div>
                 <dt>Source</dt>
                 <dd>
-                  <button
+                  <Button
                     type="button"
                     className="about-link"
                     onClick={() => void window.spoon.app.openExternal('https://github.com/elgodox/spoon')}
                   >
                     github.com/elgodox/spoon
-                  </button>
+                  </Button>
                 </dd>
               </div>
               {info && (

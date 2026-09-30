@@ -10,7 +10,7 @@ import {
 } from 'electron'
 import { existsSync, mkdirSync, watch as fsWatch, writeFileSync, type FSWatcher } from 'node:fs'
 import { release } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname } from 'node:path'
 import type {
   ActivityItem,
   AiEndpointConfig,
@@ -32,6 +32,8 @@ import * as oauth from './oauth'
 import * as updater from './updater'
 import { analyzeRepository, analyzeWorkspaces, generateCommitMessage } from './ai'
 import * as launchers from './launchers'
+import * as profile from './profile'
+import { mapIndexLine } from '../shared/change-location'
 import { listProviderModels } from './model-catalog'
 
 app.commandLine.appendSwitch('disable-gpu-sandbox')
@@ -75,8 +77,8 @@ function windowChrome() {
     return {
       dark: true,
       material,
-      background: '#1e1e1e',
-      bar: '#2d2d2d',
+      background: pack === 'spoon' ? '#110c24' : '#1e1e1e',
+      bar: pack === 'spoon' ? '#17112d' : '#2d2d2d',
       symbol: '#e8e8e8',
       overlayHeight: 40
     }
@@ -84,8 +86,8 @@ function windowChrome() {
   return {
     dark: false,
     material,
-    background: '#ffffff',
-    bar: '#f3f3f3',
+    background: pack === 'spoon' ? '#faf8ff' : '#ffffff',
+    bar: pack === 'spoon' ? '#f1ecfb' : '#f3f3f3',
     symbol: '#1f1f1f',
     overlayHeight: 40
   }
@@ -697,6 +699,27 @@ function registerIpc(): void {
     const err = await shell.openPath(abs)
     if (err) throw new Error(err)
   })
+  ipcMain.handle('git:openFileAt', async (_e, path: string, file: string, line = 1, launcherId?: string, staged = false) => {
+    const abs = git.worktreeFile(path, file)
+    if (!Number.isFinite(line)) throw new Error('Invalid line number.')
+    if (staged) {
+      const working = await git.getDiff(path, { path: file, staged: false })
+      line = mapIndexLine(line, working.find((diff) => diff.path === file))
+    }
+    return launchers.openFileAt(path, abs, line, launcherId)
+  })
+  ipcMain.handle('git:revealFile', (_e, path: string, file: string) => {
+    let abs = git.worktreeFile(path, file)
+    if (existsSync(abs)) return shell.showItemInFolder(abs)
+    while (!existsSync(abs) && abs !== dirname(abs)) abs = dirname(abs)
+    return shell.openPath(abs)
+  })
+  ipcMain.handle('profile:identity', (_e, path?: string) => git.identity(path || app.getPath('home')))
+  ipcMain.handle('profile:pick', () => profile.pickAvatar(mainWindow!))
+  ipcMain.handle('profile:export', (_e, data: string) => profile.exportAvatar(mainWindow!, data))
+  ipcMain.handle('profile:generators', (_e, force?: boolean) => profile.generators(force))
+  ipcMain.handle('profile:generate', (_e, id: string, description: string) => profile.generateAvatar(id, description))
+  ipcMain.handle('profile:cancel', () => profile.cancelGeneration())
   ipcMain.handle('git:reflog', (_e, path: string) => git.reflog(path))
   ipcMain.handle('git:readConflict', (_e, path: string, file: string) => git.readConflict(path, file))
   ipcMain.handle('git:writeResolved', (_e, path: string, file: string, content: string) => git.writeResolved(path, file, content))
@@ -854,6 +877,7 @@ app.whenReady().then(async () => {
   })
 })
 
+app.on('before-quit', () => profile.cancelGeneration())
 app.on('window-all-closed', () => {
   for (const w of watchers.values()) void w.close()
   if (process.platform !== 'darwin') app.quit()

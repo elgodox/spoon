@@ -4,6 +4,7 @@ const accent = resolveAccent('red', 'dark')
 if (accent.accent !== '#ff6b5a') throw new Error('mars accent dark')
 
 if (sanitizeThemePack('spacex') !== 'spacex') throw new Error('pack sanitize')
+if (sanitizeThemePack('spoon') !== 'spoon') throw new Error('spoon pack sanitize')
 if (sanitizeThemePack('nope') !== 'classic') throw new Error('pack fallback')
 
 const blue = resolveAccent('blue', 'light')

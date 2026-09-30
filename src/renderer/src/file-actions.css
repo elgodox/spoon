@@ -1,0 +1,46 @@
+@layer app, controls;
+@layer app {
+.changes-page { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.changes-page .changes { flex: 1; min-height: 0; }
+.changes-heading { flex-shrink: 0; }
+.changes-page .file-head { height: 44px; padding: 0 14px; background: var(--bg); font-size: 12px; }
+.changes-page .file-head .label { display: flex; align-items: center; gap: 8px; }
+.changes-page .file-head button { min-height: 26px; border-radius: 7px; padding: 0 9px; }
+.changes-page .file-row { min-height: 38px; height: auto; padding: 6px 12px; gap: 10px; border-left: 3px solid transparent; }
+.changes-page .file-row.sel { border-left-color: var(--accent); background: var(--sel-strong); }
+.changes-page .file-row .nm { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.changes-page .file-row .base { font-weight: 550; max-width: 100%; }
+.changes-page .file-row .dir { font-size: 10px; max-width: 100%; }
+.changes-page .file-row .badge { width: 23px; height: 23px; display: grid; place-items: center; flex: 0 0 23px; border-radius: 6px; background: color-mix(in srgb, var(--accent) 12%, var(--bg)); color: var(--accent); font-weight: 650; }
+.changes-page .file-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.changes-page .diff-col > .diff-tools { min-height: 44px; padding: 0 16px; background: var(--bg); gap: 6px; }
+.change-context-menu { position: fixed; z-index: 10000; width: 284px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; padding: 6px; background: var(--surface-raised, var(--bg)); color: var(--text); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 6px 18px #0003, 0 22px 60px #0004; }
+.context-file { padding: 9px 10px; color: var(--muted); font-size: 11px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
+.change-context-menu button { display: flex; align-items: center; width: 100%; min-height: 34px; gap: 10px; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text); text-align: left; font-size: 12px; transition: background-color 120ms cubic-bezier(0.2, 0, 0, 1); }
+.change-context-menu button:hover:not(:disabled), .change-context-menu button:focus-visible { background: var(--sel); outline: none; }
+.change-context-menu button.danger { color: var(--red, #e67d8a); }
+.change-context-menu button:disabled { opacity: .4; cursor: default; }
+.context-icon { display: flex; width: 17px; color: var(--accent); }
+.context-icon svg { width: 16px; height: 16px; stroke-width: 1.5; }
+.context-separator { height: 1px; background: var(--border); margin: 5px 6px; }
+.avatar.photo { overflow: hidden; flex-shrink: 0; outline: 1px solid #ffffff1a; outline-offset: -1px; }
+html[data-theme='light'] .avatar.photo { outline-color: #0000001a; }
+.avatar.photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.profile-settings { max-width: 700px; }
+.profile-card { display: flex; align-items: center; gap: 14px; padding: 18px; margin: 18px 0; background: var(--chrome); border: 1px solid var(--border); border-radius: 12px; }
+.profile-card .avatar { width: 64px; height: 64px; border-radius: 12px; font-size: 22px; }
+.profile-card > div { display: flex; flex-direction: column; gap: 5px; }
+.profile-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+.profile-actions button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; }
+.profile-actions svg, .profile-generator h4 svg { width: 16px; height: 16px; }
+.profile-generator { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); }
+.profile-generator h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.profile-generator textarea { width: 100%; min-height: 84px; resize: vertical; padding: 10px; }
+.profile-agent-row { display: flex; gap: 8px; }
+.profile-agent-row select { min-width: 0; flex: 1; }
+.profile-preview { display: flex; align-items: center; flex-wrap: wrap; gap: 18px; margin-top: 20px; padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--chrome); }
+.profile-preview img { width: 96px; height: 96px; border-radius: 12px; outline: 1px solid #ffffff1a; outline-offset: -1px; }
+.profile-error { color: var(--red, #e67d8a); overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { .change-context-menu button { transition: none; } }
+
+}

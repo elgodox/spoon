@@ -1,5 +1,5 @@
 export type ThemeMode = 'light' | 'dark'
-export type ThemePack = 'classic' | 'colored' | 'spacex'
+export type ThemePack = 'spoon' | 'classic' | 'colored' | 'spacex'
 export type IconStyle = 'mono' | 'color'
 export type AccentId = 'blue' | 'violet' | 'red' | 'teal' | 'amber' | 'silver' | 'custom'
 
@@ -245,8 +245,12 @@ export type WindowMaterial = 'mica' | 'acrylic' | 'none'
 export type RepoSort = 'name' | 'opened' | 'changes' | 'behind' | 'ahead' | 'status'
 
 export interface Settings {
+  avatarOverrides?: Record<string, string>
+  avatarRevision?: number
+  profileEmail?: string
   theme: ThemeMode
   themePack: ThemePack
+  appearanceVersion?: number
   iconStyle: IconStyle
   accentId: AccentId
   accentCustom?: string

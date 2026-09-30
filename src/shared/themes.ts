@@ -20,6 +20,15 @@ export type ThemePackDef = {
 
 export const THEME_PACKS: ThemePackDef[] = [
   {
+    id: 'spoon',
+    label: 'Spoon',
+    blurb: 'Deep indigo, electric violet, luminous icons. A little more flow.',
+    preview: ['#110c24', '#a855f7', '#67a8ff'],
+    preferDark: true,
+    preferIcons: 'color',
+    preferAccent: 'violet'
+  },
+  {
     id: 'classic',
     label: 'Classic',
     blurb: 'Clean Spoon chrome. Mono icons, familiar blue.',
@@ -112,11 +121,12 @@ export function resolveAccent(
 
 export function iconColorMap(pack: ThemePack, style: IconStyle): Record<string, string> | null {
   if (style !== 'color') return null
+  if (pack === 'spoon') return { ...ICON_COLORS, brand: '#ffffff', push: '#c4a0ff', branch: '#b18aff', pull: '#83b5ff', terminal: '#9aafff', home: '#c4b5fd' }
   return pack === 'spacex' ? SPACEX_ICON_COLORS : ICON_COLORS
 }
 
 export function sanitizeThemePack(value: unknown): ThemePack {
-  return value === 'colored' || value === 'spacex' || value === 'classic' ? value : 'classic'
+  return value === 'spoon' || value === 'colored' || value === 'spacex' || value === 'classic' ? value : 'classic'
 }
 
 export function sanitizeIconStyle(value: unknown): IconStyle {

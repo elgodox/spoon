@@ -40,9 +40,10 @@ function sanitizeTheme(theme: unknown): ThemeMode {
 
 const defaults: Settings = {
   theme: 'dark',
-  themePack: 'classic',
-  iconStyle: 'mono',
-  accentId: 'blue',
+  themePack: 'spoon',
+  appearanceVersion: 2,
+  iconStyle: 'color',
+  accentId: 'violet',
   fetchIntervalMin: 10,
   autoFetch: true,
   autoFetchAll: false,
@@ -60,7 +61,7 @@ const defaults: Settings = {
   aiStageAll: true,
   recentMessages: [],
   starred: {},
-  sidebarWidth: 220,
+  sidebarWidth: 250,
   changesListWidth: 280,
   changesSplit: 0.55,
   detailsHeight: 260,
@@ -93,6 +94,12 @@ function load(): StoreFile {
     const raw = readFileSync(filePath(), 'utf8')
     const parsed = JSON.parse(raw) as StoreFile
     const hadSettings = !!parsed.settings
+    // Refresh the former default appearance; keep explicitly customized themes.
+    const refreshAppearance = parsed.settings?.appearanceVersion !== 2 && (!parsed.settings?.themePack || (
+      parsed.settings.themePack === 'classic' &&
+      (!parsed.settings.accentId || parsed.settings.accentId === 'blue') &&
+      (!parsed.settings.iconStyle || parsed.settings.iconStyle === 'mono')
+    ))
     cache = {
       settings: {
         ...defaults,
@@ -100,9 +107,10 @@ function load(): StoreFile {
         onboarded: hadSettings && (parsed.recent?.length ?? 0) > 0,
         ...(parsed.settings as Partial<Settings> | undefined),
         theme: sanitizeTheme((parsed.settings as Partial<Settings> | undefined)?.theme),
-        themePack: sanitizeThemePack((parsed.settings as Partial<Settings> | undefined)?.themePack),
-        iconStyle: sanitizeIconStyle((parsed.settings as Partial<Settings> | undefined)?.iconStyle),
-        accentId: sanitizeAccentId((parsed.settings as Partial<Settings> | undefined)?.accentId),
+        themePack: refreshAppearance ? 'spoon' : sanitizeThemePack(parsed.settings?.themePack),
+        appearanceVersion: 2,
+        iconStyle: refreshAppearance ? 'color' : sanitizeIconStyle(parsed.settings?.iconStyle),
+        accentId: refreshAppearance ? 'violet' : sanitizeAccentId(parsed.settings?.accentId),
         accentCustom: sanitizeAccentCustom((parsed.settings as Partial<Settings> | undefined)?.accentCustom),
         aiProvider: fallbackAiProvider((parsed.settings as Partial<Settings> | undefined)?.aiProvider),
         aiModels: sanitizeAiModels({ ...defaults.aiModels, ...(parsed.settings?.aiModels ?? {}) }),
@@ -122,7 +130,7 @@ function load(): StoreFile {
     }
     const migratedFree =
       (parsed.settings as Partial<Settings> | undefined)?.aiProvider === 'free' || Boolean(parsed.settings?.aiModels?.free)
-    if (migratedFree) {
+    if (migratedFree || parsed.settings?.appearanceVersion !== 2) {
       try {
         save(cache)
       } catch {
