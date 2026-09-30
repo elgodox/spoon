@@ -420,6 +420,25 @@ button:disabled { cursor: default; opacity: 0.5; }
 .ahead, .behind { font-size: 10px; color: var(--muted); margin-left: auto; }
 
 .main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.history-layout-buttons { display: flex; gap: 4px; }
+.history-layout-buttons button[aria-pressed='true'] { background: var(--sel); color: var(--accent); border-color: var(--accent); }
+.history-content { flex: 1; min-height: 0; min-width: 0; display: flex; overflow: hidden; }
+.history-bottom { flex-direction: column; }
+.history-list-pane { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+.history-side .details { flex: 0 0 45%; border-top: 0; border-left: 1px solid var(--border); }
+.history-columns { overflow-x: auto; }
+.history-columns .history-list-pane { flex: 1.4 0 380px; }
+.history-column { display: flex; flex-direction: column; flex: 1 0 250px; min-width: 0; min-height: 0; border-left: 1px solid var(--border); }
+.history-column.history-diff-column { flex-basis: 360px; }
+.history-column h3 { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.history-column .detail-body { min-height: 0; }
+.workspace-editor { display: flex; flex-direction: column; gap: 14px; }
+.workspace-editor > label { display: flex; flex-direction: column; gap: 6px; }
+.workspace-repo-options { max-height: 300px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.workspace-repo-options label { display: flex; align-items: center; gap: 10px; }
+.workspace-repo-options span { min-width: 0; overflow-wrap: anywhere; }
+.workspace-repo-options small { display: block; color: var(--muted); }
+.tab-group-edit { flex: 0 0 auto; color: var(--group); }
 .commit-search {
   flex: 0 0 auto;
   display: flex; flex-wrap: wrap; gap: 8px; align-items: center;

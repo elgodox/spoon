@@ -277,6 +277,7 @@ export interface Settings {
   changesListWidth: number
   changesSplit: number
   detailsHeight: number
+  historyLayout?: 'bottom' | 'side' | 'columns'
   commitBoxHeight: number
   hideUntracked: boolean
   ignoreWhitespace: boolean

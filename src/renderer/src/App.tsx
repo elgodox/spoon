@@ -1,7 +1,7 @@
 import { Button } from './Button'
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { FileCode2, FolderOpen, Copy, History, ScanLine, Plus, Undo2, Trash2 } from 'lucide-react'
+import { FileCode2, FolderOpen, Copy, History, ScanLine, Plus, Undo2, Trash2, Pencil } from 'lucide-react'
 import { Avatar, AvatarProvider } from './Avatar'
 import { ProfileSettings } from './ProfileSettings'
 import { ContextMenu, type ContextState } from './ContextMenu'
@@ -209,6 +209,7 @@ export function App() {
   const [workspaces, setWorkspaces] = useState<RepoWorkspace[]>([])
   const [drafts, setDrafts] = useState<RepoWorkspace[]>([])
   const [manageWs, setManageWs] = useState(false)
+  const [editingWorkspace, setEditingWorkspace] = useState<RepoWorkspace | null>(null)
   const [tabMenu, setTabMenu] = useState<{ tabId: string; x: number; y: number } | null>(null)
   const [groupMenu, setGroupMenu] = useState<{
     key: string
@@ -812,7 +813,7 @@ export function App() {
     }
   }
 
-  async function updateWorkspace(workspace: RepoWorkspace, patch: { name?: string; color?: string }) {
+  async function updateWorkspace(workspace: RepoWorkspace, patch: { name?: string; color?: string; repos?: string[] }) {
     const name = (patch.name ?? workspace.name).trim()
     if (!name) return
     const color = patch.color ?? workspace.color
@@ -821,14 +822,20 @@ export function App() {
         id: workspace.id,
         name,
         color,
-        repos: workspace.repos
+        repos: patch.repos ?? workspace.repos
       })) as { workspaces: RepoWorkspace[]; saved: RepoWorkspace }
       setWorkspaces(result.workspaces)
       setTabs((ts) =>
-        ts.map((tab) => (tab.workspaceId === result.saved.id ? { ...tab, color: result.saved.color } : tab))
+        clusterGrouped(ts.map((tab) => {
+          if (result.saved.repos.some((path) => path.toLowerCase() === tab.path?.toLowerCase())) {
+            return { ...tab, workspaceId: result.saved.id, color: result.saved.color }
+          }
+          return tab.workspaceId === result.saved.id ? { ...tab, workspaceId: undefined, color: undefined } : tab
+        }))
       )
     } catch (e) {
       await window.spoon.app.error(e instanceof Error ? e.message : String(e))
+      throw e
     }
   }
 
@@ -1037,6 +1044,7 @@ export function App() {
                 <span className="tab-group-name">{ws?.name || 'Group'}</span>
                 {collapsed ? <span className="tab-group-count">{run.length}</span> : null}
               </Button>
+              <Button className="tab-group-edit" variant="icon" title={`Edit workspace “${groupTitle}”`} aria-label={`Edit workspace ${groupTitle}`} onClick={() => setEditingWorkspace(ws ?? { id: groupKey, name: groupTitle === 'Grouped by color' ? 'Workspace' : groupTitle, color: color || workspaceColor(0), repos: run.filter((tab) => tab.path).map((tab) => tab.path!) })}><Pencil size={14} /></Button>
               {!collapsed ? chips : null}
             </div>
           )
@@ -1068,6 +1076,7 @@ export function App() {
             onSaveWorkspace={(repos) => void persistNewWorkspace(repos)}
             onAddToWorkspace={(workspace, paths) => void addReposToWorkspace(workspace, paths)}
             onDeleteWorkspace={(id) => void removeWorkspace(id)}
+            onEditWorkspace={setEditingWorkspace}
             onSettings={async (patch) => {
               const s = await window.spoon.app.patchSettings(patch)
               setSettings(s)
@@ -1105,12 +1114,12 @@ export function App() {
           recent={recent}
           settings={settings}
           accounts={accounts}
+          onEdit={setEditingWorkspace}
           onClose={() => setManageWs(false)}
           onOpen={(ws) => {
             setManageWs(false)
             void openRepos(ws.repos, ws)
           }}
-          onUpdate={(ws, patch) => void updateWorkspace(ws, patch)}
           onDelete={(id) => void removeWorkspace(id)}
           onWorkspaces={setWorkspaces}
           onOpenAiSettings={() => {
@@ -1119,6 +1128,22 @@ export function App() {
           }}
         />
       )}
+      {editingWorkspace && <WorkspaceEditor
+        workspace={editingWorkspace}
+        recent={recent}
+        onClose={() => setEditingWorkspace(null)}
+        onSave={async (patch) => {
+          if (editingWorkspace.id.startsWith('draft-') || editingWorkspace.id.startsWith('color-')) {
+            const result = await window.spoon.app.saveWorkspace({ name: patch.name, color: patch.color, repos: patch.repos }) as { workspaces: RepoWorkspace[]; saved: RepoWorkspace }
+            setWorkspaces(result.workspaces)
+            setDrafts((items) => items.filter((item) => item.id !== editingWorkspace.id))
+            setTabs((items) => clusterGrouped(items.map((tab) => patch.repos.some((path) => path.toLowerCase() === tab.path?.toLowerCase())
+              ? { ...tab, workspaceId: result.saved.id, color: result.saved.color }
+              : tab.workspaceId === editingWorkspace.id ? { ...tab, workspaceId: undefined, color: undefined } : tab)))
+          } else await updateWorkspace(editingWorkspace, patch)
+          setEditingWorkspace(null)
+        }}
+      />}
       {tabMenu && menuTab?.kind === 'repo' && (
         <TabGroupMenu
           x={tabMenu.x}
@@ -1140,6 +1165,19 @@ export function App() {
           x={groupMenu.x}
           y={groupMenu.y}
           label={groupMenu.name}
+          onEdit={() => {
+            const paths = tabsRef.current.filter((tab) => groupMenu.tabIds.includes(tab.id) && tab.path).map((tab) => tab.path!)
+            const saved = groupMenu.workspaceId ? groupById.get(groupMenu.workspaceId) : undefined
+            setEditingWorkspace(saved ?? { id: groupMenu.key, name: groupMenu.name || 'Workspace', color: tabsRef.current.find((tab) => groupMenu.tabIds.includes(tab.id))?.color || workspaceColor(0), repos: paths })
+            setGroupMenu(null)
+          }}
+          onSave={() => {
+            const paths = tabsRef.current.filter((tab) => groupMenu.tabIds.includes(tab.id) && tab.path).map((tab) => tab.path!)
+            const saved = groupMenu.workspaceId ? groupById.get(groupMenu.workspaceId) : undefined
+            if (saved && !saved.id.startsWith('draft-')) void updateWorkspace(saved, { repos: paths }).catch(() => {})
+            else setEditingWorkspace(saved ?? { id: groupMenu.key, name: groupMenu.name || 'Workspace', color: tabsRef.current.find((tab) => groupMenu.tabIds.includes(tab.id))?.color || workspaceColor(0), repos: paths })
+            setGroupMenu(null)
+          }}
           onClose={() => setGroupMenu(null)}
           onCloseGroup={() => {
             const ids = groupMenu.tabIds
@@ -1596,6 +1634,7 @@ function Workspace({
   const [sel, setSel] = useState<SideSel>({ kind: 'all' })
   const [commit, setCommit] = useState<CommitInfo | null>(snap.commits[0] ?? null)
   const [detailTab, setDetailTab] = useState<'commit' | 'changes' | 'tree'>('commit')
+  const historyLayout = settings?.historyLayout ?? 'bottom'
   const [filter, setFilter] = useState('')
   const [sideCollapsed, setSideCollapsed] = useState<Set<string>>(() => new Set())
   const [focusBranch, setFocusBranch] = useState<string | null>(null)
@@ -1608,6 +1647,7 @@ function Workspace({
   const [stagedSel, setStagedSel] = useState<string[]>([])
   const [fileAnchor, setFileAnchor] = useState<string | null>(null)
   const [diffs, setDiffs] = useState<FileDiff[]>([])
+  const [commitDiffs, setCommitDiffs] = useState<FileDiff[]>([])
   const [changeMenu, setChangeMenu] = useState<ContextState | null>(null)
   const closeChangeMenu = useCallback(() => setChangeMenu(null), [])
   const [fileEditors, setFileEditors] = useState<LauncherInfo[]>([])
@@ -1691,13 +1731,16 @@ function Workspace({
   }, [snap.status.unstaged, snap.status.staged, settings?.hideUntracked])
 
   useEffect(() => {
-    if (detailTab === 'changes' && commit) {
-      void window.spoon.git.diff(path, { commit: commit.hash }).then((d) => setDiffs(d as FileDiff[]))
+    let current = true
+    setCommitDiffs([]); setTree([])
+    if ((detailTab === 'changes' || historyLayout === 'columns') && commit) {
+      void window.spoon.git.diff(path, { commit: commit.hash }).then((d) => { if (current) setCommitDiffs(d as FileDiff[]) }).catch((reason) => { if (current) void window.spoon.app.error(String(reason)) })
     }
-    if (detailTab === 'tree' && commit) {
-      void window.spoon.git.tree(path, commit.hash).then((t) => setTree(t as FileTreeNode[]))
+    if ((detailTab === 'tree' || historyLayout === 'columns') && commit) {
+      void window.spoon.git.tree(path, commit.hash).then((t) => { if (current) setTree(t as FileTreeNode[]) }).catch((reason) => { if (current) void window.spoon.app.error(String(reason)) })
     }
-  }, [detailTab, commit, path])
+    return () => { current = false }
+  }, [detailTab, commit, path, historyLayout])
 
   async function doStage(list: string[], unstage = false) {
     if (unstage) await window.spoon.git.unstage(path, list)
@@ -2583,6 +2626,9 @@ function Workspace({
             <div className="history-heading">
               <div><span className="eyebrow">REPOSITORY</span><h2>Commit history <span>{visibleCommits.length}</span></h2></div>
               <div className="history-context">
+                <div className="history-layout-buttons" role="group" aria-label="History layout">
+                  {(['bottom', 'side', 'columns'] as const).map((layout) => <Button key={layout} variant="segment" aria-pressed={historyLayout === layout} title={layout === 'bottom' ? 'Details below history' : layout === 'side' ? 'Details beside history' : 'History, Commit, Changes and File Tree in columns'} onClick={() => onPatchSettings({ historyLayout: layout })}>{layout === 'bottom' ? 'Bottom' : layout === 'side' ? 'Side' : 'Columns'}</Button>)}
+                </div>
                 <span className="branch-pill" title={focusBranch || scopeRef || snap.status.branch}><IcoBranch /> {focusBranch || scopeRef || snap.status.branch}</span>
                 {focusBranch && <Button className="ghost tiny" onClick={() => { setFocusBranch(null); setPulseHashes([]); setSel({ kind: 'all' }) }}>Show all</Button>}
               </div>
@@ -2601,6 +2647,8 @@ function Workspace({
                 Reflog
               </Button>
             </div>
+            <div className={`history-content history-${historyLayout}`}>
+            <div className="history-list-pane">
             {scopeRef && !refCommits ? (
               <div className="empty">Loading commits...</div>
             ) : (
@@ -2647,7 +2695,8 @@ function Workspace({
               }}
             />
             )}
-            {commit && (
+            </div>
+            {commit && historyLayout === 'bottom' && (
               <div
                 className="splitbar y"
                 onPointerDown={(e) =>
@@ -2664,8 +2713,8 @@ function Workspace({
                 }
               />
             )}
-            {commit && (
-              <div className="details" style={{ height: detailsH, flex: '0 0 auto' }}>
+            {commit && historyLayout !== 'columns' && (
+              <div className="details" style={historyLayout === 'bottom' ? { height: detailsH, flex: '0 0 auto' } : undefined}>
                 <div className="detail-tabs">
                   {(['commit', 'changes', 'tree'] as const).map((t) => (
                     <Button variant="tab" key={t} className={detailTab === t ? 'active' : ''} onClick={() => setDetailTab(t)}>
@@ -2675,7 +2724,7 @@ function Workspace({
                 </div>
                 <div className="detail-body">
                   {detailTab === 'commit' && <CommitDetails c={commit} />}
-                  {detailTab === 'changes' && <DiffView repo={path} rev={commit.hash} diffs={diffs} split={split} />}
+                  {detailTab === 'changes' && <DiffView repo={path} rev={commit.hash} diffs={commitDiffs} split={split} />}
                   {detailTab === 'tree' && (
                     <FileTree
                       nodes={tree}
@@ -2686,6 +2735,12 @@ function Workspace({
                 </div>
               </div>
             )}
+            {commit && historyLayout === 'columns' && <>
+              <section className="history-column"><h3>Commit</h3><div className="detail-body"><CommitDetails c={commit} /></div></section>
+              <section className="history-column history-diff-column"><h3>Changes</h3><div className="detail-body"><DiffView repo={path} rev={commit.hash} diffs={commitDiffs} split={split} /></div></section>
+              <section className="history-column"><h3>File Tree</h3><div className="detail-body"><FileTree nodes={tree} onHistory={(f) => onOverlay({ type: 'history', file: f })} onBlame={(f) => onOverlay({ type: 'blame', file: f, rev: commit.hash })} /></div></section>
+            </>}
+            </div>
           </>
         )}
       </div>
@@ -4737,12 +4792,16 @@ function WorkspaceGroupMenu({
   x,
   y,
   label,
+  onEdit,
+  onSave,
   onClose,
   onCloseGroup
 }: {
   x: number
   y: number
   label?: string
+  onEdit: () => void
+  onSave: () => void
   onClose: () => void
   onCloseGroup: () => void
 }) {
@@ -4753,6 +4812,8 @@ function WorkspaceGroupMenu({
         style={{ left: Math.max(8, Math.min(x, window.innerWidth - 220)), top: Math.max(8, Math.min(y, window.innerHeight - 120)) }}
         onMouseDown={(event) => event.stopPropagation()}
       >
+        <Button type="button" className="tab-menu-item" onClick={onEdit}>Edit workspace</Button>
+        <Button type="button" className="tab-menu-item" onClick={onSave}>Save open repositories</Button>
         <Button type="button" className="tab-menu-item danger" onClick={onCloseGroup}>
           {label ? `Close workspace “${label}”` : 'Close group'}
         </Button>
@@ -4817,6 +4878,46 @@ function TabGroupMenu({
   )
 }
 
+function WorkspaceEditor({ workspace, recent, onClose, onSave }: {
+  workspace: RepoWorkspace
+  recent: RepoSummary[]
+  onClose: () => void
+  onSave: (patch: { name: string; color: string; repos: string[] }) => Promise<void>
+}) {
+  const [name, setName] = useState(workspace.name)
+  const [color, setColor] = useState(workspace.color)
+  const [repos, setRepos] = useState(workspace.repos)
+  const [extra, setExtra] = useState<string[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const choices = [...new Map([...workspace.repos, ...recent.map((repo) => repo.path), ...extra].map((path) => [path.toLowerCase(), path])).values()]
+  async function save() {
+    setBusy(true); setError('')
+    try { await onSave({ name: name.trim(), color, repos }) }
+    catch (reason) { setError((reason as Error).message) }
+    finally { setBusy(false) }
+  }
+  return <Modal title="Edit workspace" onClose={() => { if (!busy) onClose() }}>
+    <div className="workspace-editor">
+      <label>Workspace name<input autoFocus value={name} disabled={busy} onChange={(event) => setName(event.target.value)} /></label>
+      <div className="swatches" aria-label="Workspace color">{WORKSPACE_COLORS.map((item) => <Button key={item} className={`swatch ${item === color ? 'on' : ''}`} style={{ background: item }} aria-label={item} aria-pressed={item === color} disabled={busy} onClick={() => setColor(item)} />)}</div>
+      <strong>Repositories · {repos.length}</strong>
+      <div className="workspace-repo-options">{choices.map((path) => <label key={path.toLowerCase()} title={path}>
+        <input type="checkbox" disabled={busy} checked={repos.some((repo) => repo.toLowerCase() === path.toLowerCase())} onChange={(event) => setRepos((current) => event.target.checked ? [...current, path] : current.filter((repo) => repo.toLowerCase() !== path.toLowerCase()))} />
+        <span>{recent.find((repo) => repo.path.toLowerCase() === path.toLowerCase())?.name || fileName(path)}<small>{path}</small></span>
+      </label>)}</div>
+      <Button className="ghost" disabled={busy} onClick={() => void catchErr(async () => {
+        const picked = await window.spoon.app.pickRepo() as { repos?: string[] } | string | null
+        const paths = typeof picked === 'string' ? [picked] : picked?.repos ?? []
+        setExtra((current) => [...current, ...paths])
+        setRepos((current) => [...new Map([...current, ...paths].map((path) => [path.toLowerCase(), path])).values()])
+      })}>Add repositories…</Button>
+      {error && <p role="alert">{error}</p>}
+      <div className="profile-actions"><Button className="primary" disabled={busy || !name.trim() || !repos.length} onClick={() => void save()}>{busy ? 'Saving…' : 'Save workspace'}</Button><Button disabled={busy} onClick={onClose}>Cancel</Button></div>
+    </div>
+  </Modal>
+}
+
 function WorkspaceManager({
   workspaces,
   recent,
@@ -4824,7 +4925,7 @@ function WorkspaceManager({
   accounts,
   onClose,
   onOpen,
-  onUpdate,
+  onEdit,
   onDelete,
   onWorkspaces,
   onOpenAiSettings
@@ -4835,14 +4936,11 @@ function WorkspaceManager({
   accounts: AiAccount[]
   onClose: () => void
   onOpen: (workspace: RepoWorkspace) => void
-  onUpdate: (workspace: RepoWorkspace, patch: { name?: string; color?: string }) => void
+  onEdit: (workspace: RepoWorkspace) => void
   onDelete: (id: string) => void
   onWorkspaces: (workspaces: RepoWorkspace[]) => void
   onOpenAiSettings: () => void
 }) {
-  const [editId, setEditId] = useState<string | null>(null)
-  const [name, setName] = useState('')
-  const [color, setColor] = useState<string>(WORKSPACE_COLORS[0])
   const [aiBusy, setAiBusy] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
   const [draft, setDraft] = useState<(WorkspaceSuggestion & { include: boolean; color: string })[] | null>(null)
@@ -4851,12 +4949,6 @@ function WorkspaceManager({
   const provider = fallbackAiProvider(settings?.aiProvider)
   const model = settings?.aiModels?.[provider]
   const aiConnected = accounts.some((account) => account.provider === provider && account.connected)
-
-  function startEdit(workspace: RepoWorkspace) {
-    setEditId(workspace.id)
-    setName(workspace.name)
-    setColor(workspace.color)
-  }
 
   async function runAiAnalyze() {
     if (recent.length < 2) {
@@ -4976,75 +5068,21 @@ function WorkspaceManager({
       ) : workspaces.length > 0 ? (
         <ul className="ws-admin">
           {workspaces.map((workspace) => {
-            const editing = editId === workspace.id
             const labels = workspace.repos.map((path) => names.get(path.toLowerCase()) || path.split(/[\\/]/).pop() || path)
             return (
               <li key={workspace.id}>
-                <span className="ws-dot" style={{ background: editing ? color : workspace.color }} />
+                <span className="ws-dot" style={{ background: workspace.color }} />
                 <div className="ws-admin-copy">
-                  {editing ? (
-                    <>
-                      <input
-                        autoFocus
-                        value={name}
-                        aria-label="Workspace name"
-                        onChange={(event) => setName(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter' && name.trim()) {
-                            onUpdate(workspace, { name, color })
-                            setEditId(null)
-                          }
-                          if (event.key === 'Escape') setEditId(null)
-                        }}
-                      />
-                      <div className="swatches">
-                        {WORKSPACE_COLORS.map((item) => (
-                          <Button
-                            key={item}
-                            type="button"
-                            className={`swatch ${item === color ? 'on' : ''}`}
-                            style={{ background: item }}
-                            aria-label={item}
-                            aria-pressed={item === color}
-                            onClick={() => setColor(item)}
-                          />
-                        ))}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <strong>{workspace.name}</strong>
-                      <div className="hint" title={labels.join(', ')}>
-                        {labels.join(', ')}
-                      </div>
-                    </>
-                  )}
+                  <strong>{workspace.name}</strong>
+                  <div className="hint" title={labels.join(', ')}>{labels.join(', ')}</div>
                 </div>
                 <div className="ws-admin-actions">
-                  {editing ? (
-                    <>
-                      <Button
-                        type="button"
-                        className="ghost"
-                        disabled={!name.trim()}
-                        onClick={() => {
-                          onUpdate(workspace, { name, color })
-                          setEditId(null)
-                        }}
-                      >
-                        Save
-                      </Button>
-                      <Button type="button" className="ghost" onClick={() => setEditId(null)}>
-                        Cancel
-                      </Button>
-                    </>
-                  ) : (
                     <>
                       <Button type="button" className="ghost" onClick={() => onOpen(workspace)}>
                         Open
                       </Button>
-                      <Button type="button" className="ghost" onClick={() => startEdit(workspace)}>
-                        Rename
+                      <Button type="button" className="ghost" onClick={() => onEdit(workspace)}>
+                        Edit
                       </Button>
                       <Button
                         type="button"
@@ -5060,7 +5098,6 @@ function WorkspaceManager({
                         Delete
                       </Button>
                     </>
-                  )}
                 </div>
               </li>
             )

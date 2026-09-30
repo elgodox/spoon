@@ -47,6 +47,7 @@ type Props = {
   onSaveWorkspace: (paths: string[]) => void
   onAddToWorkspace: (workspace: RepoWorkspace, paths: string[]) => void
   onDeleteWorkspace: (id: string) => void
+  onEditWorkspace: (workspace: RepoWorkspace) => void
   onSettings: (patch: Partial<Settings>) => Promise<void>
 }
 
@@ -67,6 +68,7 @@ export function RepoHome({
   onSaveWorkspace,
   onAddToWorkspace,
   onDeleteWorkspace,
+  onEditWorkspace,
   onSettings
 }: Props) {
   const [sel, setSel] = useState(recent[0]?.path)
@@ -505,6 +507,7 @@ export function RepoHome({
                   {workspace.name}
                 </span>
                 <span className="counter">{workspace.repos.length}</span>
+                <Button type="button" className="ghost tiny" aria-label={`Edit ${workspace.name}`} onClick={(event) => { event.stopPropagation(); onEditWorkspace(workspace) }}>Edit</Button>
                 <Button
                   type="button"
                   className="icon-x"

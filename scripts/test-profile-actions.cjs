@@ -63,6 +63,22 @@ async function main() {
   }
   await assert.rejects(profile.generateAvatar('unknown', 'x'), /not installed/)
   await assert.rejects(profile.generateAvatar('codex', ''), /Describe/)
+  const grokArgs = global.__avatarTest.calls.find((call) => call.command === 'grok').args
+  assert.ok(grokArgs.includes('--verbatim')); assert.ok(grokArgs.includes('--no-plan'))
+  assert.equal(grokArgs[grokArgs.indexOf('--permission-mode') + 1], 'dontAsk')
+  if (process.env.SPOON_TEST_LIVE_GROK === '1') {
+    const live = { name: 'live-profile', setup(build) {
+      build.onResolve({ filter: /^electron$|^\.\/launchers$/ }, ({ path: id }) => ({ path: id, namespace: 'live-profile' }))
+      build.onLoad({ filter: /.*/, namespace: 'live-profile' }, ({ path: id }) => ({ contents: id === 'electron' ? 'export const dialog = {};' : 'export async function listLaunchers(){return {launchers:[{id:"grok",command:"grok",available:true}]}}' }))
+    } }
+    const real = await load('src/main/profile.ts', [live])
+    const image = await real.generateAvatar('grok', 'A friendly astronaut in violet and blue, simple bold shapes')
+    const metadata = await sharp(Buffer.from(image.split(',')[1], 'base64')).metadata()
+    assert.equal(metadata.width, 256); assert.equal(metadata.format, 'png')
+    await fs.mkdir('output/workspace-history', { recursive: true })
+    await fs.writeFile('output/workspace-history/grok-avatar.png', Buffer.from(image.split(',')[1], 'base64'))
+    console.log('Live Grok avatar generated and rasterized successfully.')
+  }
   delete global.__avatarTest
   console.log('Profile, SVG validation, editor line mapping, literal arguments and cancellation tests passed.')
 }

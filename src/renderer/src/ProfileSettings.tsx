@@ -13,10 +13,17 @@ export function ProfileSettings({ settings, repo, onPersist }: { settings: Setti
   const [description, setDescription] = useState('An astronaut with violet and blue lighting, a friendly illustrated style')
   const [preview, setPreview] = useState('')
   const [busy, setBusy] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const mounted = useRef(true)
   const generating = useRef(false)
+  useEffect(() => {
+    if (!busy || !generating.current) return
+    setElapsed(0)
+    const timer = window.setInterval(() => setElapsed((value) => value + 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [busy])
   useEffect(() => {
     mounted.current = true
     void window.spoon.profile.identity(repo).then((value) => { if (mounted.current) { setIdentity(value); setEmail((current) => current || value.email) } }).catch(() => {})
@@ -52,6 +59,7 @@ export function ProfileSettings({ settings, repo, onPersist }: { settings: Setti
       <label htmlFor="avatar-agent">Local CLI or agent</label><div className="profile-agent-row"><select id="avatar-agent" value={agent} disabled={busy || !agents.length} onChange={(e) => setAgent(e.target.value)}>{!agents.length && <option value="">No supported CLI detected</option>}{agents.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><Button className="ghost" disabled={busy} onClick={() => void task(async () => { const value = await window.spoon.profile.generators(true); setAgents(value); setAgent((current) => value.some((item: LauncherInfo) => item.id === current) ? current : value[0]?.id ?? '') })}>Detect again</Button></div>
       <label htmlFor="avatar-prompt">Describe your avatar</label><textarea id="avatar-prompt" value={description} maxLength={2000} disabled={busy} onChange={(e) => setDescription(e.target.value)} />
       <div className="profile-actions"><Button className="primary" disabled={busy || !agent || !description.trim() || !key} onClick={() => void task(async () => { generating.current = true; const image = await window.spoon.profile.generate(agent, description); if (mounted.current) setPreview(image) })}><IcoAi /> {busy && generating.current ? 'Generating…' : 'Generate avatar'}</Button>{busy && generating.current && <Button onClick={() => void window.spoon.profile.cancel()}>Cancel</Button>}</div>
+      {busy && generating.current && <p className="hint" role="status">Waiting for {agents.find((item) => item.id === agent)?.label || agent} · {elapsed}s. The illustration will appear below. Generation stops after 3 minutes if the CLI does not respond.</p>}
     </div>
     {preview && <div className="profile-preview"><img src={preview} alt="Avatar preview" /><div><strong>Preview</strong><p className="hint">Apply locally or export to upload to Gravatar.</p><div className="profile-actions"><Button className="primary" disabled={busy || !key} onClick={() => void task(apply)}>Use this photo</Button><Button disabled={busy} onClick={() => void task(async () => { await window.spoon.profile.export(preview) })}>Export PNG</Button><Button className="ghost" disabled={busy} onClick={() => setPreview('')}>Discard</Button></div></div></div>}
     {error && <p className="profile-error" role="alert">{error}</p>}{notice && <p className="hint" role="status">{notice}</p>}

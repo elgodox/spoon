@@ -67,7 +67,7 @@ export async function generateAvatar(id: string, description: string): Promise<s
       claude: ['-p', '--output-format', 'text', '--tools=', '--no-session-persistence'],
       gemini: ['-p', prompt, '--output-format', 'text', '--approval-mode', 'plan'],
       'cursor-agent': ['-p', prompt, '--output-format', 'text', '--mode', 'plan', '--workspace', dir],
-      grok: ['-p', prompt, '--output-format', 'plain', '--permission-mode', 'plan', '--tools='],
+      grok: ['-p', prompt, '--verbatim', '--output-format', 'plain', '--no-plan', '--no-subagents', '--disable-web-search', '--permission-mode', 'dontAsk', '--tools=', '--max-turns', '1'],
       opencode: ['run', '--format', 'json', '--agent', 'plan', prompt]
     }
     let output = await runCommand(cli.command, args[id], { cwd: dir, input: id === 'codex' || id === 'claude' ? prompt : undefined, signal: controller.signal })
