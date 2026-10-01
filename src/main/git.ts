@@ -1,8 +1,9 @@
-import { spawn } from 'node:child_process'
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
+import { ensureWindowsEnv, gitChildEnv, realGitExecutable, whereCommand } from './git-env'
 import type {
   BlameLine,
   BranchInfo,
@@ -63,30 +64,61 @@ export interface GitResult {
 
 let gitExe = 'git'
 
+ensureWindowsEnv()
+
 export function setGitPath(path?: string): void {
-  gitExe = path && existsSync(path) ? path : 'git'
+  gitExe = path && existsSync(path) ? realGitExecutable(path) : 'git'
 }
 
 export async function findGit(): Promise<string> {
-  const candidates = [
+  const localGit = join(homedir(), 'AppData', 'Local', 'Programs', 'Git')
+  const programFiles = process.env['ProgramFiles'] ?? 'C:\\Program Files'
+  const programFilesX86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
+  const seeds = [
     gitExe,
     'git',
-    join(process.env['ProgramFiles'] ?? 'C:\\Program Files', 'Git', 'cmd', 'git.exe'),
-    join(process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', 'Git', 'cmd', 'git.exe'),
-    join(homedir(), 'AppData', 'Local', 'Programs', 'Git', 'cmd', 'git.exe')
+    join(programFiles, 'Git', 'mingw64', 'bin', 'git.exe'),
+    join(localGit, 'mingw64', 'bin', 'git.exe'),
+    join(programFiles, 'Git', 'cmd', 'git.exe'),
+    join(programFilesX86, 'Git', 'cmd', 'git.exe'),
+    join(localGit, 'cmd', 'git.exe')
   ]
-  for (const c of candidates) {
-    try {
-      const r = await runGitRaw(undefined, ['--version'], { git: c })
-      if (r.code === 0) {
-        gitExe = c
-        return c
+  const seen = new Set<string>()
+  for (const seed of seeds) {
+    for (const candidate of await locateGit(seed)) {
+      const key = candidate.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      try {
+        const r = await runGitRaw(undefined, ['--version'], { git: candidate })
+        if (r.code === 0) {
+          gitExe = candidate
+          return candidate
+        }
+      } catch {
+        /* try next */
       }
-    } catch {
-      /* try next */
     }
   }
   throw new Error('Git was not found. Install Git for Windows and restart Spoon.')
+}
+
+async function locateGit(seed: string): Promise<string[]> {
+  const resolved = seed.toLowerCase() === 'git' ? (await whereCommand('git')) ?? seed : seed
+  const real = realGitExecutable(resolved)
+  return real === resolved ? [resolved] : [real, resolved]
+}
+
+function spawnGit(
+  args: string[],
+  opts?: { cwd?: string; git?: string; env?: NodeJS.ProcessEnv }
+): ChildProcessWithoutNullStreams {
+  const git = opts?.git ?? gitExe
+  return spawn(git, args, {
+    cwd: opts?.cwd,
+    windowsHide: true,
+    env: gitChildEnv({ extra: opts?.env, gitPath: git })
+  })
 }
 
 function runGitRaw(
@@ -95,18 +127,7 @@ function runGitRaw(
   opts?: { stdin?: string; git?: string; env?: NodeJS.ProcessEnv }
 ): Promise<GitResult> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(opts?.git ?? gitExe, args, {
-      cwd,
-      windowsHide: true,
-      env: {
-        ...process.env,
-        ...opts?.env,
-        GIT_OPTIONAL_LOCKS: '0',
-        GIT_TERMINAL_PROMPT: '0',
-        LANG: 'en_US.UTF-8',
-        LC_ALL: 'C.UTF-8'
-      }
-    })
+    const child = spawnGit(args, { cwd, git: opts?.git, env: opts?.env })
     let stdout = ''
     let stderr = ''
     child.stdout.setEncoding('utf8')
@@ -135,7 +156,9 @@ export async function git(
   args: string[],
   opts?: { stdin?: string; allowFail?: boolean; env?: NodeJS.ProcessEnv }
 ): Promise<GitResult> {
-  const r = await runGitRaw(cwd, ['-c', 'core.quotepath=false', '-c', 'i18n.logoutputencoding=utf-8', ...args], opts)
+  const command = ['-c', 'core.quotepath=false', '-c', 'i18n.logoutputencoding=utf-8', ...args]
+  let r = await runGitRaw(cwd, command, opts)
+  if (r.code !== 0 && isDnsThreadFailure(r)) r = await runGitRaw(cwd, command, opts)
   if (r.code !== 0 && !opts?.allowFail) {
     const msg = (r.stderr || r.stdout || `git ${args.join(' ')} failed`).trim()
     const err = new Error(msg)
@@ -143,6 +166,10 @@ export async function git(
     throw err
   }
   return r
+}
+
+function isDnsThreadFailure(result: GitResult): boolean {
+  return /getaddrinfo\(\) thread failed to start/i.test(`${result.stderr}\n${result.stdout}`)
 }
 
 const SCAN_SKIP = new Set([
@@ -289,10 +316,7 @@ export async function cloneRepo(
   if (opts.recursive) args.push('--recurse-submodules')
   args.push(opts.url, target)
   const r = await new Promise<GitResult>((resolvePromise, reject) => {
-    const child = spawn(gitExe, args, {
-      windowsHide: true,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-    })
+    const child = spawnGit(args)
     let stdout = ''
     let stderr = ''
     child.stdout.setEncoding('utf8')
@@ -1021,11 +1045,7 @@ function readWorktreeMedia(cwd: string, file: string): { buf: Buffer; tooLarge: 
 
 function gitBinary(cwd: string, args: string[]): Promise<{ buf: Buffer; tooLarge: boolean; bytes: number } | null> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(gitExe, args, {
-      cwd,
-      windowsHide: true,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-    })
+    const child = spawnGit(args, { cwd })
     const chunks: Buffer[] = []
     let size = 0
     let tooLarge = false

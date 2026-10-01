@@ -34,6 +34,7 @@ import { analyzeRepository, analyzeWorkspaces, generateCommitMessage } from './a
 import * as launchers from './launchers'
 import * as profile from './profile'
 import { mapIndexLine } from '../shared/change-location'
+import { humanGitError } from '../shared/git-error'
 import { listProviderModels } from './model-catalog'
 
 app.commandLine.appendSwitch('disable-gpu-sandbox')
@@ -582,7 +583,7 @@ function registerIpc(): void {
     return r.response === 1
   })
   ipcMain.handle('app:error', async (_e, message: string) => {
-    await dialog.showMessageBox(mainWindow!, { type: 'error', message })
+    await dialog.showMessageBox(mainWindow!, { type: 'error', message: humanGitError(String(message ?? '')) })
   })
   ipcMain.handle('app:popup', (_e, items: Electron.MenuItemConstructorOptions[]) => {
     const wire = (rows: Electron.MenuItemConstructorOptions[]): Electron.MenuItemConstructorOptions[] =>
