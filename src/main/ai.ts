@@ -1,7 +1,7 @@
 import { findAiSite, openAiUrl } from '../shared/ai-catalog'
-import type { AiEndpointConfig, AiProviderId, ChangeAnalysis, RepoSummary, WorkspaceAnalysis } from '../shared/types'
+import type { AiEndpointConfig, AiProviderId, ChangeAnalysis, ChangeBriefFile, RepoSummary, WorkspaceAnalysis } from '../shared/types'
 import { fallbackWorkspaceAnalysis, parseWorkspaceAnalysis } from '../shared/workspaces'
-import { fallbackAnalysis, parseAnalysis } from './analysis'
+import { fallbackAnalysis, fileDependencies, parseAnalysis, repairCommitOrder } from './analysis'
 import { changeBrief } from './git'
 import { providerLabel, resolveCreds } from './oauth'
 import { getSettings, type StoredAiCreds } from './store'
@@ -21,7 +21,21 @@ Rules:
 - Every listed file appears in exactly one commit.
 - Group files that implement the same feature, fix, or refactor.
 - Do not invent paths.
-- Order commits so later ones can build on earlier ones.
+- Order commits so each one still works on top of the commits before it.
+- A file that uses a new or changed file, symbol, or API belongs in the same commit or a later one.
+- Do not delete a file before the other changes that stop using it.
+- Do not mention pushing or that you are an AI.`
+
+const REVIEW_SYSTEM = `You review a proposed sequence of local Git commits and fix any sequence that would break an intermediate tree.
+Return JSON only, with no markdown fences:
+{"summary":"short paragraph","commits":[{"subject":"imperative, max 72 chars","body":"why","files":["relative/path"],"rationale":"one sentence"}]}
+Rules:
+- Every listed file appears in exactly one commit.
+- Do not invent paths.
+- Checking out any prefix of the sequence must stay consistent. A change that uses a file, symbol, type, or API introduced or changed by another change must be in the same commit or a later one.
+- A deletion or rename must not land before the other changed files that still reference it are updated.
+- Merge commits when splitting them would break the previous commit. Keep them separate when each prefix stays valid.
+- Rewrite subjects and bodies so they match the final groups.
 - Do not mention pushing or that you are an AI.`
 
 const WORKSPACE_SYSTEM = `You organize Git repositories into named workspaces for a desktop Git client.
@@ -49,29 +63,69 @@ export async function generateCommitMessage(
   return complete(provider, user, SYSTEM, undefined, model)
 }
 
-export async function analyzeRepository(provider: AiProviderId, cwd: string, model?: string): Promise<ChangeAnalysis> {
-  const files = await changeBrief(cwd)
-  if (!files.length) throw new Error('No local changes to analyze.')
-  const known = files.map((file) => file.path)
+export async function analyzeRepository(
+  provider: AiProviderId,
+  cwd: string,
+  model?: string,
+  scope: 'all' | 'staged' = 'all'
+): Promise<ChangeAnalysis> {
+  const all = await changeBrief(cwd)
+  const scoped = scope === 'staged' ? all.filter((file) => file.status.includes('staged')) : all
+  if (!scoped.length) {
+    throw new Error(scope === 'staged' ? 'No staged changes to analyze.' : 'No local changes to analyze.')
+  }
+  const known = scoped.map((file) => file.path)
+  const kind = scope === 'staged' ? 'staged' : 'uncommitted'
+  let analysis: ChangeAnalysis
+  try {
+    const text = await complete(
+      provider,
+      `Group these ${kind} changes into one commit per implementation.\n\n${briefListing(scoped)}`,
+      ANALYZE_SYSTEM,
+      1600,
+      model
+    )
+    analysis = parseAnalysis(text, known)
+  } catch (error) {
+    const fallback = fallbackAnalysis(scoped)
+    const reason = error instanceof Error ? error.message : String(error)
+    analysis = {
+      ...fallback,
+      summary: `${fallback.summary} AI grouping was not used (${reason}).`
+    }
+  }
+  analysis = repairCommitOrder(analysis, all)
+  const involved = [...new Set(analysis.commits.flatMap((commit) => commit.files))]
+  if (involved.length < 2) return analysis
+  const related = all.filter((file) => involved.includes(file.path.replace(/\\/g, '/').replace(/^\.\//, '')))
+  const depText = [...fileDependencies(related).entries()]
+    .filter(([, needs]) => needs.length)
+    .map(([file, needs]) => `- ${file} needs ${needs.join(', ')} in the same commit or earlier`)
+    .join('\n')
+  const proposed = JSON.stringify({ summary: analysis.summary, commits: analysis.commits })
+  try {
+    const text = await complete(
+      provider,
+      `Review this commit sequence. Reorder or merge commits so none of them breaks the tree left by the previous commit.\n\nProposed:\n${proposed}\n\nDependencies:\n${depText || '(none detected from imports)'}\n\nChanges:\n${briefListing(related, 16_000)}`,
+      REVIEW_SYSTEM,
+      1800,
+      model
+    )
+    analysis = repairCommitOrder(parseAnalysis(text, involved), all)
+  } catch {
+    // The local order repair still keeps imports and deletions from breaking the previous commit.
+  }
+  return analysis
+}
+
+function briefListing(files: ChangeBriefFile[], limit = 24_000): string {
   const listing = files
     .map((file, index) => {
       const body = index < 30 ? file.patch : `(${file.status}, patch omitted)`
       return `### ${file.path} (${file.status})\n${body}`
     })
     .join('\n\n')
-  const clipped = listing.length > 24_000 ? listing.slice(0, 24_000) + '\n\n[truncated]' : listing
-  const user = `Group these uncommitted changes into one commit per implementation.\n\n${clipped}`
-  try {
-    const text = await complete(provider, user, ANALYZE_SYSTEM, 1600, model)
-    return parseAnalysis(text, known)
-  } catch (error) {
-    const fallback = fallbackAnalysis(files)
-    const reason = error instanceof Error ? error.message : String(error)
-    return {
-      ...fallback,
-      summary: `${fallback.summary} AI grouping was not used (${reason}).`
-    }
-  }
+  return listing.length > limit ? listing.slice(0, limit) + '\n\n[truncated]' : listing
 }
 
 export async function analyzeWorkspaces(
