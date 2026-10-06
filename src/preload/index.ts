@@ -96,8 +96,8 @@ const api = {
     grokPoll: (flow: object) => ipcRenderer.invoke('ai:grokPoll', flow),
     generate: (provider: string, diff: string, extra?: string, model?: string) =>
       ipcRenderer.invoke('ai:generate', provider, diff, extra, model),
-    analyze: (repo: string, provider: string, model?: string) =>
-      ipcRenderer.invoke('ai:analyze', repo, provider, model),
+    analyze: (repo: string, provider: string, model?: string, scope?: 'all' | 'staged') =>
+      ipcRenderer.invoke('ai:analyze', repo, provider, model, scope),
     analyzeWorkspaces: (provider: string, model?: string) =>
       ipcRenderer.invoke('ai:analyzeWorkspaces', provider, model),
     models: (provider: string, force?: boolean) => ipcRenderer.invoke('ai:models', provider, force),

@@ -407,8 +407,8 @@ function buildMenu(): void {
             { label: 'Run AI Button', accelerator: 'Ctrl+Alt+Enter', click: () => sendMenu('ai-primary') },
             { type: 'separator' },
             { label: 'Write Message Only', accelerator: 'Ctrl+Alt+M', click: () => sendMenu('ai-fill') },
-            { label: 'Commit Local', click: () => sendMenu('ai-commit') },
-            { label: 'Commit & Push', accelerator: 'Ctrl+Alt+Shift+Enter', click: () => sendMenu('ai-commit-push') },
+            { label: 'Split & Commit', click: () => sendMenu('ai-commit') },
+            { label: 'Split, Commit & Push', accelerator: 'Ctrl+Alt+Shift+Enter', click: () => sendMenu('ai-commit-push') },
             { type: 'separator' },
             { label: 'Analyze Changes', accelerator: 'Ctrl+Alt+A', click: () => sendMenu('analyze') }
           ]
@@ -769,8 +769,8 @@ function registerIpc(): void {
   ipcMain.handle('ai:generate', async (_e, provider: AiProviderId, diff: string, extra?: string, model?: string) =>
     generateCommitMessage(provider, diff, extra, model)
   )
-  ipcMain.handle('ai:analyze', (_e, repo: string, provider: AiProviderId, model?: string) =>
-    analyzeRepository(provider, repo, model)
+  ipcMain.handle('ai:analyze', (_e, repo: string, provider: AiProviderId, model?: string, scope?: string) =>
+    analyzeRepository(provider, repo, model, scope === 'staged' ? 'staged' : 'all')
   )
   ipcMain.handle('ai:analyzeWorkspaces', (_e, provider: AiProviderId, model?: string) =>
     analyzeWorkspaces(provider, store.getRecent(), model)
