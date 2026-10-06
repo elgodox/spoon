@@ -59,6 +59,7 @@ import {
   IcoAi,
   IcoBranch,
   IcoChanges,
+  IcoCheck,
   IcoChevron,
   IcoClose,
   IcoConsole,
@@ -1660,6 +1661,8 @@ function Workspace({
   const [msg, setMsg] = useState('')
   const [amend, setAmend] = useState(false)
   const [aiBusy, setAiBusy] = useState(false)
+  const [aiBusyText, setAiBusyText] = useState('')
+  const [commitBusy, setCommitBusy] = useState(false)
   const [planBusy, setPlanBusy] = useState(false)
   const [analysis, setAnalysis] = useState<ChangeAnalysis | null>(null)
   const [drafts, setDrafts] = useState<DraftCommit[]>([])
@@ -1752,6 +1755,7 @@ function Workspace({
     if (committingRef.current) return
     if (!msg.trim() && !amend) return
     committingRef.current = true
+    setCommitBusy(true)
     onBusy(true)
     await catchErr(async () => {
       await window.spoon.git.commit(path, { message: msg.trim() || snap.commits[0]?.subject || 'Update', amend })
@@ -1765,6 +1769,7 @@ function Workspace({
     })
     onBusy(false)
     committingRef.current = false
+    setCommitBusy(false)
   }
 
   function openAiSettings() {
@@ -1779,7 +1784,12 @@ function Workspace({
 
   async function aiFill(andGo: 'fill' | 'commit' | 'commit-push' = settings?.aiCommitMode ?? 'commit') {
     if (!requireAi()) return
+    if (andGo !== 'fill' && !amend) {
+      await aiSplitCommit(andGo === 'commit-push')
+      return
+    }
     setAiBusy(true)
+    setAiBusyText('Writing...')
     await catchErr(async () => {
       if (andGo !== 'fill' && !snap.status.stagedCount) {
         if (settings?.aiStageAll === false) {
@@ -1806,6 +1816,58 @@ function Workspace({
       onReload()
     })
     setAiBusy(false)
+    setAiBusyText('')
+  }
+
+  async function aiSplitCommit(pushAfter: boolean) {
+    if (committingRef.current) return
+    if (snap.status.merging || snap.status.rebasing || snap.status.cherryPicking) {
+      await window.spoon.app.error('Finish the merge, rebase, or cherry-pick before creating commits.')
+      return
+    }
+    const staged = snap.status.stagedCount
+    const dirty = staged + snap.status.unstagedCount
+    if (!dirty) {
+      await window.spoon.app.error('Nothing to commit.')
+      return
+    }
+    if (!staged && settings?.aiStageAll === false) {
+      await window.spoon.app.error('Stage changes first, or enable “Stage all when empty” in Settings → AI.')
+      return
+    }
+    committingRef.current = true
+    setAiBusy(true)
+    setAiBusyText('Analyzing...')
+    onBusy(true)
+    let made = 0
+    await catchErr(async () => {
+      const result = (await window.spoon.ai.analyze(path, provider, model, staged ? 'staged' : 'all')) as ChangeAnalysis
+      const chosen = result.commits.filter((item) => item.subject.trim() && item.files.length)
+      if (!chosen.length) throw new Error('The analysis did not name any commits.')
+      setAiBusyText(chosen.length > 1 ? `Committing ${chosen.length}...` : 'Committing...')
+      await window.spoon.git.unstageAll(path)
+      for (const item of chosen) {
+        await window.spoon.git.stage(path, item.files)
+        const message = item.body.trim() ? `${item.subject.trim()}\n\n${item.body.trim()}` : item.subject.trim()
+        await window.spoon.git.commit(path, { message })
+        made++
+      }
+      if (pushAfter) {
+        await pushHead(path, snap)
+        document.dispatchEvent(new CustomEvent('spoon-confetti'))
+      }
+    })
+    if (made) {
+      setMsg('')
+      setAmend(false)
+      setAnalysis(null)
+      setDrafts([])
+      onReload()
+    }
+    onBusy(false)
+    committingRef.current = false
+    setAiBusy(false)
+    setAiBusyText('')
   }
 
   async function runAnalysis() {
@@ -1838,22 +1900,26 @@ function Workspace({
     }
     const ok = await window.spoon.app.confirm(
       `Create ${chosen.length} local commit${chosen.length === 1 ? '' : 's'}?`,
-      `${chosen.map((item) => item.subject).join('\n')}\n\nNothing is pushed. Each commit includes the whole file.`
+      `${chosen.map((item) => item.subject).join('\n')}\n\nNothing is pushed. Each commit includes the whole file, in an order that keeps the previous commit valid.`
     )
     if (!ok) return
     onBusy(true)
+    let made = 0
     await catchErr(async () => {
       await window.spoon.git.unstageAll(path)
       for (const item of chosen) {
         await window.spoon.git.stage(path, item.files)
         const message = item.body.trim() ? `${item.subject.trim()}\n\n${item.body.trim()}` : item.subject.trim()
         await window.spoon.git.commit(path, { message })
+        made++
       }
+    })
+    if (made) {
       setAnalysis(null)
       setDrafts([])
       setMsg('')
       onReload()
-    })
+    }
     onBusy(false)
   }
 
@@ -2492,7 +2558,7 @@ function Workspace({
                 <div className="analysis">
                   <div className="analysis-head">
                     <strong>Analysis</strong>
-                    <span className="hint">Local commits only. Nothing is pushed.</span>
+                    <span className="hint">Local commits only. Ordered so each one still works after the previous. Nothing is pushed.</span>
                     <Button className="ghost" onClick={() => { setAnalysis(null); setDrafts([]) }}>
                       Close
                     </Button>
@@ -2559,7 +2625,7 @@ function Workspace({
                 <textarea
                   placeholder="Commit message · Ctrl+Enter to commit"
                   value={msg}
-                  style={{ height: Math.max(64, commitH - 52) }}
+                  style={{ height: Math.max(64, commitH - 80) }}
                   onChange={(e) => setMsg(e.target.value)}
                   onKeyDown={(e) => {
                     if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return
@@ -2584,20 +2650,42 @@ function Workspace({
                   />
                   <div className="commit-actions">
                     <Button
+                      className="primary ico-text"
+                      disabled={aiBusy || commitBusy || (!msg.trim() && !amend)}
+                      title="Commit the message above (Ctrl+Enter)"
+                      onClick={() => void doCommit(false)}
+                    >
+                      <IcoCheck />
+                      <span>{commitBusy ? 'Committing...' : 'Commit'}</span>
+                    </Button>
+                    <Button
+                      className="ghost ico-text"
+                      disabled={aiBusy || commitBusy || (!msg.trim() && !amend)}
+                      title="Commit the message above and push (Ctrl+Shift+Enter)"
+                      onClick={() => void doCommit(true)}
+                    >
+                      <IcoPush />
+                      <span>Commit & push</span>
+                    </Button>
+                    <Button
                       className="primary ai ico-text"
-                      disabled={aiBusy}
-                      title="Change what this does in Settings → AI"
+                      disabled={aiBusy || commitBusy}
+                      title={
+                        (settings?.aiCommitMode ?? 'commit') === 'fill'
+                          ? 'Write a commit message from the changes'
+                          : 'Analyze the changes, split them into commits that stay valid in order, and create them all at once'
+                      }
                       onClick={() => void aiFill()}
                     >
                       <IcoAi />
                       <span>
                         {aiBusy
-                          ? 'Working...'
+                          ? aiBusyText || 'Working...'
                           : (settings?.aiCommitMode ?? 'commit') === 'fill'
                             ? 'AI message'
                             : (settings?.aiCommitMode ?? 'commit') === 'commit-push'
                               ? 'AI commit & push'
-                              : 'AI commit'}
+                              : 'AI commits'}
                       </span>
                     </Button>
                   </div>
@@ -4302,15 +4390,18 @@ function SettingsDialog({
           <div className="ai-pane-head">
             <div className="ai-commit-card">
               <div className="ai-commit-copy">
-                <h3>Commit button</h3>
-                <p className="hint">Ctrl+Enter commits. Ctrl+Shift+Enter commits and pushes.</p>
+                <h3>AI button</h3>
+                <p className="hint">
+                  Split changes into several commits, ordered so each one still works after the previous. Commit and Commit
+                  &amp; push use the message in the box. Ctrl+Enter commits. Ctrl+Shift+Enter commits and pushes.
+                </p>
               </div>
               <div className="seg ai-commit-seg">
                 {(
                   [
                     ['fill', 'Write message'],
-                    ['commit', 'Commit'],
-                    ['commit-push', 'Commit & push']
+                    ['commit', 'Split & commit'],
+                    ['commit-push', 'Split & push']
                   ] as const
                 ).map(([id, label]) => (
                   <Button
@@ -4770,6 +4861,7 @@ function TabChip({
       className={`tab ${active ? 'active' : ''}`}
       role="tab"
       aria-selected={active}
+      style={tab.color ? { ['--tab-color' as string]: tab.color } : undefined}
       onContextMenu={(event) => {
         if (tab.kind !== 'repo') return
         event.preventDefault()
