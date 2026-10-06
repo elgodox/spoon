@@ -149,7 +149,7 @@ button:disabled { cursor: default; opacity: 0.5; }
   height: 24px;
   padding: 0 2px 0 8px;
   display: flex; align-items: center; gap: 2px;
-  border: 0;
+  border: 2px solid transparent;
   border-radius: 8px;
   background: transparent;
   color: var(--muted);
@@ -580,6 +580,7 @@ button:disabled { cursor: default; opacity: 0.5; }
 }
 .commit-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; flex: 0 0 auto; }
 .commit-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; justify-content: flex-end; }
+.commit-actions button { white-space: nowrap; }
 .commit-actions button,
 .commit-bar .model-select {
   height: 32px;
@@ -1311,6 +1312,9 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   transition: background 140ms ease, border-color 140ms ease, box-shadow 140ms ease, transform 120ms ease;
 }
 .tab.active {
+  color: var(--text);
+  border-color: var(--tab-color, var(--accent));
+  background: color-mix(in srgb, var(--tab-color, var(--accent)) 16%, var(--bg));
   box-shadow: none;
 }
 
@@ -2059,7 +2063,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 [data-icons='color'] .tb-btn[data-ico='settings'] { --ico-tint: var(--ico-settings); }
 
 [data-icons='color'] .primary.ai .icon-svg { color: var(--ico-ai, currentColor); }
-[data-icons='color'] .commit-actions .ghost .icon-svg { color: var(--ico-analyze, currentColor); }
+[data-icons='color'] .commit-actions .ghost .icon-svg { color: var(--ico-push, currentColor); }
 
 /* SpaceX / xAI pack — true void black (must beat html[data-theme] tokens) */
 html[data-pack='spacex'],
@@ -2183,8 +2187,9 @@ html[data-pack='spacex'] .side-item:hover {
 }
 html[data-pack='spacex'] .side-item.picked,
 html[data-pack='spacex'] .tab.active {
-  background: color-mix(in srgb, var(--accent) 14%, #121214);
-  box-shadow: inset 2px 0 0 var(--accent);
+  background: color-mix(in srgb, var(--tab-color, var(--accent)) 14%, #121214);
+  border-color: var(--tab-color, var(--accent));
+  box-shadow: inset 2px 0 0 var(--tab-color, var(--accent));
 }
 
 html[data-pack='spacex'] .primary {
