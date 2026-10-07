@@ -77,7 +77,9 @@ const api = {
     worktrees: (path: string) => ipcRenderer.invoke('git:worktrees', path)
   },
   repo: {
-    overview: (paths: string[]) => ipcRenderer.invoke('repo:overview', paths),
+    overview: (paths: string[], force?: boolean) => ipcRenderer.invoke('repo:overview', paths, force),
+    activity: (paths: string[], requestId?: string, spanDays?: number) =>
+      ipcRenderer.invoke('repo:activity', paths, requestId, spanDays),
     health: (path: string, deep?: boolean) => ipcRenderer.invoke('repo:health', path, deep),
     fix: (path: string, fix: string, input?: { name?: string; email?: string }) =>
       ipcRenderer.invoke('repo:fix', path, fix, input),
@@ -138,6 +140,7 @@ const api = {
     error: (message: string) => ipcRenderer.invoke('app:error', message),
     popup: (items: object[]) => ipcRenderer.invoke('app:popup', items),
     chrome: () => ipcRenderer.invoke('app:chrome'),
+    maximized: () => ipcRenderer.invoke('app:maximized'),
     version: () => ipcRenderer.invoke('app:version'),
     about: () => ipcRenderer.invoke('app:about'),
     openIn: (path: string, target: 'editor' | 'terminal' | 'explorer') => ipcRenderer.invoke('app:openIn', path, target),

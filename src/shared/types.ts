@@ -426,6 +426,26 @@ export interface BulkResult {
   message: string
 }
 
+export interface RepoActivity {
+  path: string
+  days: Record<string, number>
+}
+
+export interface ActivityReport {
+  personal: boolean
+  rows: RepoActivity[]
+}
+
+export interface ActivityProgress {
+  requestId: string
+  path: string
+  days: Record<string, number>
+  done: number
+  total: number
+  personal: boolean
+  reset?: boolean
+}
+
 export interface UpdateState {
   status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'none' | 'error' | 'disabled'
   version?: string

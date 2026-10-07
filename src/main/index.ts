@@ -10,9 +10,11 @@ import {
 } from 'electron'
 import { existsSync, mkdirSync, watch as fsWatch, writeFileSync, type FSWatcher } from 'node:fs'
 import { release } from 'node:os'
-import { join, resolve, dirname } from 'node:path'
+import { basename, join, resolve, dirname } from 'node:path'
 import type {
   ActivityItem,
+  ActivityProgress,
+  ActivityReport,
   AiEndpointConfig,
   AiProviderId,
   BulkAction,
@@ -27,6 +29,7 @@ import type {
   WindowMaterial
 } from '../shared/types'
 import * as git from './git'
+import * as records from './repo-cache'
 import * as store from './store'
 import * as oauth from './oauth'
 import * as updater from './updater'
@@ -168,6 +171,9 @@ function createWindow(): void {
     if (!mainWindow || mainWindow.isDestroyed()) return
     store.patchSettings({ windowBounds: mainWindow.getBounds() })
   })
+  const publishMaximized = () => send('window:maximized', !!mainWindow?.isMaximized())
+  mainWindow.on('maximize', publishMaximized)
+  mainWindow.on('unmaximize', publishMaximized)
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
     void dialog.showMessageBox(mainWindow!, {
       type: 'error',
@@ -334,6 +340,7 @@ function watchGitDir(repoPath: string, gitDir: string): void {
 }
 
 function unwatchRepo(path: string): void {
+  commitCache.delete(path)
   const w = watchers.get(path)
   if (w) {
     w.close()
@@ -478,9 +485,11 @@ function registerIpc(): void {
     const s = store.getSettings()
     if (s.pinned?.includes(path)) store.patchSettings({ pinned: s.pinned.filter((p) => p !== path) })
     unwatchRepo(path)
+    records.forget(path)
     return store.removeRecent(path)
   })
   ipcMain.handle('app:chrome', () => chromeInfo())
+  ipcMain.handle('app:maximized', () => !!mainWindow?.isMaximized())
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('app:about', () => ({
     version: app.getVersion(),
@@ -501,9 +510,95 @@ function registerIpc(): void {
   ipcMain.handle('app:update', () => updater.current())
   ipcMain.handle('app:checkUpdate', () => updater.check())
   ipcMain.handle('app:installUpdate', () => updater.install())
-  ipcMain.handle('repo:overview', (_e, paths: string[]) => {
+  ipcMain.handle('repo:overview', async (_e, paths: string[], force?: boolean) => {
     const run = git.limiter(6)
-    return Promise.all(paths.map((p) => run(() => git.overview(p))))
+    const rows = await Promise.all(
+      paths.map((path) =>
+        run(async () => {
+          const stamp = git.repoStamp(path)
+          if (!force) {
+            const cached = records.recallOverview(path, stamp)
+            if (cached) return cached
+          }
+          const overview = await git.overview(path)
+          records.saveOverview(path, stamp, overview)
+          return overview
+        })
+      )
+    )
+    records.flush()
+    return rows
+  })
+  ipcMain.handle('repo:activity', async (e, paths: string[], requestId?: string, spanDays?: number): Promise<ActivityReport> => {
+    const span = Math.min(366 * 6, Math.max(1, Math.floor(spanDays || 30)))
+    const unique = [...new Set(paths.filter((p) => typeof p === 'string' && p))].slice(0, 60)
+    let email = ''
+    try {
+      email = (await git.identity(app.getPath('home'))).email.trim()
+    } catch {
+      email = ''
+    }
+    const run = git.limiter(4)
+    const load = async (author?: string) => {
+      let done = 0
+      const authorKey = author || ''
+      return Promise.all(
+        unique.map((path) =>
+          run(async () => {
+            const stamp = git.repoStamp(path)
+            let days = records.recallActivity(path, stamp, span, authorKey)
+            if (!days) {
+              try {
+                days = await git.activityDays(path, author, span)
+              } catch {
+                days = {}
+              }
+              records.saveActivity(path, stamp, span, authorKey, days)
+            }
+            done += 1
+            if (requestId) {
+              const progress: ActivityProgress = {
+                requestId,
+                path,
+                days,
+                done,
+                total: unique.length,
+                personal: !!author
+              }
+              e.sender.send('repo:activity-progress', progress)
+            }
+            return { path, days }
+          })
+        )
+      )
+    }
+    const total = (rows: ActivityReport['rows']) =>
+      rows.reduce((sum, row) => sum + Object.values(row.days).reduce((count, value) => count + value, 0), 0)
+    if (!email) {
+      const rows = await load()
+      records.flush()
+      return { personal: false, rows }
+    }
+    const mine = await load(email)
+    if (total(mine) > 0) {
+      records.flush()
+      return { personal: true, rows: mine }
+    }
+    if (requestId) {
+      const reset: ActivityProgress = {
+        requestId,
+        path: '',
+        days: {},
+        done: 0,
+        total: unique.length,
+        personal: false,
+        reset: true
+      }
+      e.sender.send('repo:activity-progress', reset)
+    }
+    const rows = await load()
+    records.flush()
+    return { personal: false, rows }
   })
   ipcMain.handle('repo:health', (_e, path: string, deep?: boolean) => git.health(path, !!deep))
   ipcMain.handle('repo:fix', async (_e, path: string, fix: RepoFixId, input?: { name?: string; email?: string }) => {
@@ -600,9 +695,10 @@ function registerIpc(): void {
 
   ipcMain.handle('git:isRepo', (_e, path: string) => git.isRepo(path))
   ipcMain.handle('git:open', async (_e, path: string) => {
-    if (!(await git.isRepo(path))) throw new Error('That folder is not a Git repository.')
-    const root = await git.repoRoot(path)
-    store.touchRepo(root, await git.repoName(root))
+    const info = await git.repoInfo(path)
+    if (!info) throw new Error('That folder is not a Git repository.')
+    const root = info.root
+    store.touchRepo(root, basename(root))
     watchRepo(root)
     return snapshot(root)
   })
@@ -780,13 +876,34 @@ function registerIpc(): void {
   ipcMain.handle('ai:removeEndpoint', (_e, id: string) => oauth.removeEndpoint(id))
 }
 
+/** Commit history only changes when a ref or HEAD moves, so reuse it across status refreshes. */
+const commitCache = new Map<string, { key: string; commits: Awaited<ReturnType<typeof git.getCommits>> }>()
+
+function refsKey(
+  head: string,
+  branches: Awaited<ReturnType<typeof git.getBranches>>,
+  tags: Awaited<ReturnType<typeof git.getTags>>,
+  stashes: Awaited<ReturnType<typeof git.getStashes>>
+): string {
+  return [
+    head,
+    branches.map((b) => `${b.fullName}=${b.hash}`).join(','),
+    tags.map((t) => `${t.name}=${t.hash}`).join(','),
+    stashes.map((st) => st.hash).join(',')
+  ].join('|')
+}
+
 async function snapshot(path: string) {
   const existing = snapInflight.get(path)
   if (existing) return existing
   const run = (async () => {
-    const [status, commits, branches, tags, remotes, stashes, submodules, identity] = await Promise.all([
+    const cached = commitCache.get(path)
+    const head = git.headMark(path)
+    // Nothing cached yet: read history in parallel with everything else.
+    const freshCommits = cached ? null : git.getCommits(path, 250, ['--all'])
+    freshCommits?.catch(() => undefined) // surfaced below when awaited
+    const [status, branches, tags, remotes, stashes, submodules, identity] = await Promise.all([
       git.getStatus(path),
-      git.getCommits(path, 250, ['--all']),
       git.getBranches(path),
       git.getTags(path),
       git.getRemotes(path),
@@ -794,6 +911,12 @@ async function snapshot(path: string) {
       git.getSubmodules(path),
       git.identity(path)
     ])
+    const key = refsKey(head, branches, tags, stashes)
+    const commits =
+      freshCommits ? await freshCommits : cached && cached.key === key ? cached.commits : await git.getCommits(path, 250, ['--all'])
+    // Only trust the key when HEAD did not move while the refs were being read.
+    if (git.headMark(path) === head) commitCache.set(path, { key, commits })
+    else commitCache.delete(path)
     return { status, commits, branches, tags, remotes, stashes, submodules, identity }
   })().finally(() => snapInflight.delete(path))
   snapInflight.set(path, run)
@@ -877,7 +1000,10 @@ app.whenReady().then(async () => {
   })
 })
 
-app.on('before-quit', () => profile.cancelGeneration())
+app.on('before-quit', () => {
+  profile.cancelGeneration()
+  records.flush()
+})
 app.on('window-all-closed', () => {
   for (const w of watchers.values()) void w.close()
   if (process.platform !== 'darwin') app.quit()

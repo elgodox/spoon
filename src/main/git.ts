@@ -32,6 +32,7 @@ import type {
   SubmoduleInfo,
   TagInfo
 } from '../shared/types'
+import { dayKeyFromUnix } from '../shared/activity'
 import { classifyMedia } from '../shared/media'
 import { layoutGraph } from './graph'
 
@@ -258,6 +259,19 @@ export async function isRepo(path: string): Promise<boolean> {
   return r.code === 0 && r.stdout.trim() === 'true'
 }
 
+/** One `git rev-parse` for everything opening a repository needs. */
+export async function repoInfo(path: string): Promise<{ root: string; gitDir: string } | null> {
+  if (!path || !existsSync(path)) return null
+  const r = await git(path, ['rev-parse', '--is-inside-work-tree', '--show-toplevel', '--absolute-git-dir'], { allowFail: true })
+  if (r.code !== 0) return null
+  const [inside, top, dir] = r.stdout.split(/\r?\n/).map((line) => line.trim())
+  if (inside !== 'true' || !top) return null
+  const root = resolve(top)
+  const gitDir = dir ? resolve(dir) : join(root, '.git')
+  gitDirs.set(root, gitDir)
+  return { root, gitDir }
+}
+
 export async function repoRoot(path: string): Promise<string> {
   const r = await git(path, ['rev-parse', '--show-toplevel'])
   return resolve(r.stdout.trim())
@@ -323,10 +337,64 @@ const gitDirs = new Map<string, string>()
 export async function gitDirOf(cwd: string): Promise<string> {
   const cached = gitDirs.get(cwd)
   if (cached) return cached
+  const fast = gitDirFast(cwd)
+  if (fast && existsSync(join(fast, 'HEAD'))) {
+    gitDirs.set(cwd, fast)
+    return fast
+  }
   const r = await git(cwd, ['rev-parse', '--absolute-git-dir'], { allowFail: true })
   const dir = r.code === 0 && r.stdout.trim() ? resolve(r.stdout.trim()) : join(cwd, '.git')
   gitDirs.set(cwd, dir)
   return dir
+}
+
+function gitDirFast(cwd: string): string | null {
+  const dot = join(cwd, '.git')
+  if (!existsSync(dot)) return null
+  try {
+    if (statSync(dot).isDirectory()) return dot
+    const text = readFileSync(dot, 'utf8')
+    const match = text.match(/^gitdir:\s*(.+)$/m)
+    if (!match) return null
+    const target = match[1].trim()
+    return isAbsolute(target) ? target : resolve(cwd, target)
+  } catch {
+    return null
+  }
+}
+
+function fileMark(file: string, read = false): string {
+  try {
+    const st = statSync(file)
+    if (!st.isFile()) return `dir:${Math.round(st.mtimeMs)}`
+    const body = read ? readFileSync(file, 'utf8').trim() : ''
+    return `${body}:${Math.round(st.mtimeMs)}:${st.size}`
+  } catch {
+    return '-'
+  }
+}
+
+/** Cheap fingerprint of commits, the index, refs, and in-progress Git operations. */
+export function repoStamp(cwd: string): string {
+  if (!cwd || !existsSync(cwd)) return 'missing'
+  const gitDir = gitDirFast(cwd)
+  if (!gitDir || !existsSync(gitDir)) return 'nogit'
+  const head = fileMark(join(gitDir, 'HEAD'), true)
+  const refName = head.startsWith('ref: ') ? head.slice(5).split(':')[0].trim() : ''
+  return [
+    head,
+    refName ? fileMark(join(gitDir, refName), true) : '',
+    fileMark(join(gitDir, 'index')),
+    fileMark(join(gitDir, 'logs', 'HEAD')),
+    fileMark(join(gitDir, 'packed-refs')),
+    fileMark(join(gitDir, 'refs', 'heads')),
+    fileMark(join(gitDir, 'refs', 'remotes')),
+    existsSync(join(gitDir, 'MERGE_HEAD')) ? 'merge' : '',
+    existsSync(join(gitDir, 'rebase-merge')) || existsSync(join(gitDir, 'rebase-apply')) ? 'rebase' : '',
+    existsSync(join(gitDir, 'CHERRY_PICK_HEAD')) ? 'cherry' : '',
+    existsSync(join(gitDir, 'REVERT_HEAD')) ? 'revert' : '',
+    existsSync(join(gitDir, 'BISECT_LOG')) ? 'bisect' : ''
+  ].join('|')
 }
 
 function operationIn(gitDir: string): RepoOverview['operation'] {
@@ -473,6 +541,30 @@ function isImage(path: string): boolean {
   return IMAGE_EXT.has(extname(path).toLowerCase())
 }
 
+function authorPattern(email: string): string {
+  return email.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')
+}
+
+/** Commit counts per local calendar day for the recent history window. */
+export async function activityDays(cwd: string, author?: string, spanDays = 30): Promise<Record<string, number>> {
+  const since = new Date()
+  since.setHours(0, 0, 0, 0)
+  since.setDate(since.getDate() - Math.max(0, spanDays - 1))
+  const day = `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, '0')}-${String(since.getDate()).padStart(2, '0')}`
+  const args = ['log', '--all', `--since=${day}`, '--pretty=format:%ct']
+  if (author) args.push(`--author=${authorPattern(author)}`)
+  const r = await git(cwd, args, { allowFail: true })
+  if (r.code !== 0 || !r.stdout.trim()) return {}
+  const days: Record<string, number> = {}
+  for (const line of r.stdout.split('\n')) {
+    const seconds = Number(line.trim())
+    if (!seconds) continue
+    const key = dayKeyFromUnix(seconds)
+    days[key] = (days[key] ?? 0) + 1
+  }
+  return days
+}
+
 export async function getCommits(cwd: string, max = 400, extraArgs: string[] = []): Promise<CommitInfo[]> {
   const fmt = ['%H', '%P', '%an', '%ae', '%cn', '%ce', '%at', '%s', '%b', '%D'].join('%x1f') + '%x1e'
   const r = await git(cwd, [
@@ -559,17 +651,6 @@ export async function getBranches(cwd: string): Promise<BranchInfo[]> {
       behind
     })
   }
-  const current = list.find((b) => b.current)
-  if (current?.upstream) {
-    const ab = await git(cwd, ['rev-list', '--left-right', '--count', `${current.upstream}...HEAD`], {
-      allowFail: true
-    })
-    if (ab.code === 0) {
-      const [behind, ahead] = ab.stdout.trim().split(/\s+/).map(Number)
-      current.ahead = ahead || 0
-      current.behind = behind || 0
-    }
-  }
   return list
 }
 
@@ -600,6 +681,8 @@ export async function getRemotes(cwd: string): Promise<RemoteInfo[]> {
 }
 
 export async function getStashes(cwd: string): Promise<StashInfo[]> {
+  const dir = gitDirFast(cwd)
+  if (dir && !existsSync(join(dir, 'logs', 'refs', 'stash')) && !existsSync(join(dir, 'refs', 'stash'))) return []
   const r = await git(cwd, ['stash', 'list', '--pretty=format:%gd%x1f%H%x1f%s%x1f%at'], { allowFail: true })
   if (r.code !== 0 || !r.stdout.trim()) return []
   return r.stdout
@@ -612,6 +695,7 @@ export async function getStashes(cwd: string): Promise<StashInfo[]> {
 }
 
 export async function getSubmodules(cwd: string): Promise<SubmoduleInfo[]> {
+  if (!existsSync(join(cwd, '.gitmodules'))) return []
   const r = await git(cwd, ['submodule', 'status'], { allowFail: true })
   if (r.code !== 0 || !r.stdout.trim()) return []
   return r.stdout
@@ -1119,8 +1203,27 @@ export async function gitConfig(cwd: string, key: string): Promise<string> {
 }
 
 export async function identity(cwd: string): Promise<{ name: string; email: string }> {
-  const [name, email] = await Promise.all([gitConfig(cwd, 'user.name'), gitConfig(cwd, 'user.email')])
+  const r = await git(cwd, ['config', '--get-regexp', '^user\\.(name|email)$'], { allowFail: true })
+  let name = ''
+  let email = ''
+  for (const line of r.stdout.split(/\r?\n/)) {
+    const m = line.match(/^user\.(name|email)\s+(.*)$/i)
+    if (!m) continue
+    if (m[1].toLowerCase() === 'name') name = m[2].trim()
+    else email = m[2].trim()
+  }
   return { name, email }
+}
+
+/** HEAD as written on disk: a symbolic ref or a detached hash. */
+export function headMark(cwd: string): string {
+  const dir = gitDirFast(cwd)
+  if (!dir) return ''
+  try {
+    return readFileSync(join(dir, 'HEAD'), 'utf8').trim()
+  } catch {
+    return ''
+  }
 }
 
 export async function getStagedPatch(cwd: string): Promise<string> {

@@ -194,6 +194,22 @@ async function pushHead(path: string, snap?: Snapshot) {
   })
 }
 
+/** Opening several repositories at once: a few in flight keeps Git busy without flooding it. */
+const OPEN_CONCURRENCY = 4
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++
+      out[index] = await fn(items[index], index)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
+}
+
 export function App() {
   const [tabs, setTabs] = useState<Tab[]>([{ id: 'mgr', kind: 'manager', name: 'New Tab' }])
   const [activeId, setActiveId] = useState('mgr')
@@ -313,13 +329,21 @@ export function App() {
     setSettings(s)
     setSidebarW(s.sidebarWidth || 250)
     applyAppearance(s)
-    setRecent(await window.spoon.app.recent())
-    setWorkspaces((await window.spoon.app.workspaces()) as RepoWorkspace[])
-    setAccounts(await window.spoon.ai.accounts())
     if (!s.onboarded) setTour(true)
-    const chrome = (await window.spoon.app.chrome()) as { material?: string }
-    if (chrome.material) document.documentElement.dataset.material = chrome.material
-    setUpdate((await window.spoon.app.update()) as UpdateState)
+    // Independent reads: ask for all of them at once instead of one after another.
+    const [recentList, workspaceList, accountList, chrome, updateState] = await Promise.all([
+      window.spoon.app.recent(),
+      window.spoon.app.workspaces(),
+      window.spoon.ai.accounts(),
+      window.spoon.app.chrome(),
+      window.spoon.app.update()
+    ])
+    setRecent(recentList)
+    setWorkspaces(workspaceList as RepoWorkspace[])
+    setAccounts(accountList)
+    const material = (chrome as { material?: string }).material
+    if (material) document.documentElement.dataset.material = material
+    setUpdate(updateState as UpdateState)
   }, [applyAppearance])
 
   useEffect(() => {
@@ -363,21 +387,20 @@ export function App() {
     const unique = [...new Set(paths)]
     if (!unique.length) return
     setBusy(true)
-    const opened: { path: string; name: string; id: string; snap: Snapshot }[] = []
     const errors: string[] = []
-    for (const path of unique) {
+    const stamp = Date.now().toString(36)
+    const results = await mapLimit(unique, OPEN_CONCURRENCY, async (path) => {
       try {
-        const snap = (await window.spoon.git.open(path)) as Snapshot
-        opened.push({
-          path,
-          name: snap.status.name,
-          id: `r-${Date.now().toString(36)}-${opened.length}`,
-          snap
-        })
+        return (await window.spoon.git.open(path)) as Snapshot
       } catch (e) {
         errors.push(e instanceof Error ? e.message : String(e))
+        return null
       }
-    }
+    })
+    const opened: { path: string; name: string; id: string; snap: Snapshot }[] = []
+    results.forEach((snap, index) => {
+      if (snap) opened.push({ path: unique[index], name: snap.status.name, id: `r-${stamp}-${opened.length}`, snap })
+    })
     if (opened.length) {
       setSnaps((m) => {
         const next = { ...m }
@@ -432,21 +455,26 @@ export function App() {
       color?: string
       snap: Snapshot
     }[] = []
-    for (const row of rows) {
+    const stamp = Date.now().toString(36)
+    const snaps = await mapLimit(rows, OPEN_CONCURRENCY, async (row) => {
       try {
-        const snap = (await window.spoon.git.open(row.path)) as Snapshot
-        opened.push({
-          id: `r-${Date.now().toString(36)}-${opened.length}`,
-          path: row.path,
-          name: snap.status.name || row.name,
-          workspaceId: row.workspaceId,
-          color: row.color,
-          snap
-        })
+        return (await window.spoon.git.open(row.path)) as Snapshot
       } catch {
-        /* skip missing or unreadable repos */
+        return null // skip missing or unreadable repos
       }
-    }
+    })
+    rows.forEach((row, index) => {
+      const snap = snaps[index]
+      if (!snap) return
+      opened.push({
+        id: `r-${stamp}-${opened.length}`,
+        path: row.path,
+        name: snap.status.name || row.name,
+        workspaceId: row.workspaceId,
+        color: row.color,
+        snap
+      })
+    })
     if (!opened.length) {
       setBusy(false)
       return
@@ -556,6 +584,9 @@ export function App() {
   }, [])
 
   useEffect(() => {
+    void window.spoon.app.maximized().then((on) => {
+      document.documentElement.dataset.maximized = on ? '1' : '0'
+    })
     const offs = [
       window.spoon.app.on('menu', (action) => {
         const a = String(action)
@@ -608,6 +639,9 @@ export function App() {
         const bar = (info as { bar?: string })?.bar
         if (material) document.documentElement.dataset.material = material
         if (bar) document.documentElement.style.setProperty('--chrome-native', bar)
+      }),
+      window.spoon.app.on('window:maximized', (on) => {
+        document.documentElement.dataset.maximized = on ? '1' : '0'
       }),
       window.spoon.app.on('auto-fetch', () => {
         if (active.path) void window.spoon.git.fetch(active.path, { all: true, prune: true }).then(() => reload())
@@ -1105,7 +1139,7 @@ export function App() {
             onBusy={setBusy}
           />
         ) : (
-          <div className="empty">Loading repository...</div>
+          <div className="empty loading">Loading repository...</div>
         )}
       </div>
 
@@ -2738,7 +2772,7 @@ function Workspace({
             <div className={`history-content history-${historyLayout}`}>
             <div className="history-list-pane">
             {scopeRef && !refCommits ? (
-              <div className="empty">Loading commits...</div>
+              <div className="empty loading">Loading commits...</div>
             ) : (
             <VirtualCommits
               commits={visibleCommits}
@@ -3091,7 +3125,7 @@ function MediaCompare({
     }
   }, [repo, file, origPath, rev])
   if (err) return <div className="empty">{err}</div>
-  if (!pair) return <div className="empty">Loading preview...</div>
+  if (!pair) return <div className="empty loading">Loading preview...</div>
   return (
     <div className={`media-preview${kind === 'image' ? ' images' : ''}`}>
       <MediaPane repo={repo} file={origPath || file} title={rev ? 'Parent' : 'HEAD'} side={pair.before} fallback={{ kind, mime }} />
@@ -3881,7 +3915,7 @@ function RebaseDialog({
   }, [path])
   return (
     <Modal title="Interactive rebase" onClose={onClose}>
-      {!items.length && <p className="hint">Loading the current branch...</p>}
+      {!items.length && <p className="hint working">Loading the current branch...</p>}
       {items.map((it, i) => (
         <div key={it.hash} className="rebase-item">
           <select

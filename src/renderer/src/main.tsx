@@ -4,6 +4,7 @@ import './styles.css'
 import './refresh.css'
 import './file-actions.css'
 import './buttons.css'
+import './home.css'
 
 const root = document.getElementById('root')!
 

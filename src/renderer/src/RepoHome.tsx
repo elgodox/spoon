@@ -4,7 +4,6 @@ import type { BulkResult, RepoHealth, RepoIssue, RepoOverview, RepoSort, RepoSum
 import type { LauncherInfo } from '../../shared/launchers'
 import {
   IcoAddRepo,
-  IcoAi,
   IcoBranch,
   IcoChevron,
   IcoClone,
@@ -26,7 +25,12 @@ import {
   IcoWorkspaces,
   IcoWrench
 } from './icons'
+import { Pencil, Search, X } from 'lucide-react'
 import { avatarColor, bindDrag, clamp, catchErr, formatAgo, initials, openMenu, openWithMenuItems } from './lib'
+import { RecentWork } from './RecentWork'
+
+/** Last known status per repository, kept across Home remounts so returning to Home paints instantly. */
+let overviewMemo: Record<string, RepoOverview> = {}
 
 type StatusFilter = 'all' | 'dirty' | 'behind' | 'ahead' | 'blocked'
 
@@ -75,7 +79,14 @@ export function RepoHome({
   const [q, setQ] = useState('')
   const [scan, setScan] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
-  const [overviews, setOverviews] = useState<Record<string, RepoOverview>>({})
+  const [overviews, setOverviewsState] = useState<Record<string, RepoOverview>>(() => ({ ...overviewMemo }))
+  const setOverviews = useCallback((next: Record<string, RepoOverview> | ((prev: Record<string, RepoOverview>) => Record<string, RepoOverview>)) => {
+    setOverviewsState((prev) => {
+      const value = typeof next === 'function' ? next(prev) : next
+      overviewMemo = value
+      return value
+    })
+  }, [])
   const [analyzing, setAnalyzing] = useState<Set<string>>(() => new Set())
   const [health, setHealth] = useState<RepoHealth | null>(null)
   const [bulk, setBulk] = useState<BulkResult[] | null>(null)
@@ -129,7 +140,7 @@ export function RepoHome({
     })
   }, [])
 
-  const refreshOverviews = useCallback(async (paths = recent.map((r) => r.path)) => {
+  const refreshOverviews = useCallback(async (paths = recent.map((r) => r.path), force = false) => {
     const gen = ++overviewGen.current
     if (!paths.length) {
       if (gen === overviewGen.current) {
@@ -138,19 +149,26 @@ export function RepoHome({
       }
       return
     }
-    markAnalyzing(paths, true)
+    const slow = window.setTimeout(() => {
+      if (gen === overviewGen.current) markAnalyzing(paths, true)
+    }, force ? 0 : 220)
     const chunk = 40
-    for (let i = 0; i < paths.length; i += chunk) {
-      if (gen !== overviewGen.current) return
-      const slice = paths.slice(i, i + chunk)
-      const rows = (await window.spoon.repo.overview(slice)) as RepoOverview[]
-      if (gen !== overviewGen.current) return
-      setOverviews((prev) => {
-        const next = { ...prev }
-        for (const row of rows) next[row.path] = row
-        return next
-      })
-      markAnalyzing(slice, false)
+    try {
+      for (let i = 0; i < paths.length; i += chunk) {
+        if (gen !== overviewGen.current) return
+        const slice = paths.slice(i, i + chunk)
+        const rows = (await window.spoon.repo.overview(slice, force)) as RepoOverview[]
+        if (gen !== overviewGen.current) return
+        setOverviews((prev) => {
+          const next = { ...prev }
+          for (const row of rows) next[row.path] = row
+          return next
+        })
+        markAnalyzing(slice, false)
+      }
+    } finally {
+      window.clearTimeout(slow)
+      if (gen === overviewGen.current) markAnalyzing(paths, false)
     }
   }, [markAnalyzing, recent])
 
@@ -230,7 +248,7 @@ export function RepoHome({
     try {
       const results = (await window.spoon.repo.bulk(action, paths)) as BulkResult[]
       setBulk(results)
-      await refreshOverviews(paths)
+      await refreshOverviews(paths, action === 'refresh')
       if (sel) {
         const h = (await window.spoon.repo.health(sel, false)) as RepoHealth
         setHealth(h)
@@ -446,7 +464,7 @@ export function RepoHome({
         }
       }
       setBulk(results)
-      await refreshOverviews(targets)
+      await refreshOverviews(targets, true)
       if (sel) {
         setHealth((await window.spoon.repo.health(sel, false)) as RepoHealth)
       }
@@ -466,7 +484,7 @@ export function RepoHome({
       } else {
         await window.spoon.repo.fix(path, id)
       }
-      await refreshOverviews([path])
+      await refreshOverviews([path], true)
       setHealth((await window.spoon.repo.health(path, false)) as RepoHealth)
     })
   }
@@ -478,456 +496,412 @@ export function RepoHome({
         await window.spoon.repo.fix(path, issue.fix!.id)
       })
     }
-    await refreshOverviews([path])
+    await refreshOverviews([path], true)
     setHealth((await window.spoon.repo.health(path, false)) as RepoHealth)
   }
 
+  const totalRepos = recent.length
+  const greeting = homeGreeting()
+  const attention = counts.broken
+  const selectedPinned = current ? pinned.includes(current.path) : false
+
   return (
-    <div className="manager">
-      <div className="mgr-side" style={{ width }}>
+    <div className="manager home">
+      <aside className="mgr-side home-side" style={{ width }} aria-label="Repositories">
         <div className="side-filter">
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Filter repositories..."
-            aria-label="Filter repositories"
-          />
+          <label className="home-search">
+            <Search size={14} aria-hidden />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Filter repositories"
+              aria-label="Filter repositories"
+            />
+            {q && (
+              <Button variant="icon" className="home-search-clear" aria-label="Clear filter" onClick={() => setQ('')}>
+                <X size={12} />
+              </Button>
+            )}
+          </label>
           <SortMenu value={sort} onChange={(next) => void onSettings({ repoSort: next })} />
         </div>
-        {workspaces.length > 0 && (
-          <>
-            <div className="side-sec">
-              Workspaces
-              <span className="counter">{workspaces.length}</span>
-            </div>
-            {workspaces.map((workspace) => (
-              <div key={workspace.id} className="side-item workspace-row" onClick={() => onOpenWorkspace(workspace)}>
-                <span className="ws-dot" style={{ background: workspace.color }} />
-                <span className="label" title={workspace.repos.join('\n')}>
-                  {workspace.name}
-                </span>
-                <span className="counter">{workspace.repos.length}</span>
-                <Button type="button" className="ghost tiny" aria-label={`Edit ${workspace.name}`} onClick={(event) => { event.stopPropagation(); onEditWorkspace(workspace) }}>Edit</Button>
-                <Button
-                  type="button"
-                  className="icon-x"
-                  aria-label={`Delete ${workspace.name}`}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void window.spoon.app
-                      .confirm(`Delete workspace “${workspace.name}”?`, 'Repositories stay on disk and in the list.')
-                      .then((ok) => {
-                        if (ok) onDeleteWorkspace(workspace.id)
-                      })
+        <div className="home-side-scroll">
+          {workspaces.length > 0 && (
+            <section className="home-side-group" aria-label="Workspaces">
+              <div className="side-sec">
+                <span>Workspaces</span>
+                <span className="counter">{workspaces.length}</span>
+              </div>
+              {workspaces.map((workspace) => (
+                <div
+                  key={workspace.id}
+                  className="side-item workspace-row"
+                  role="button"
+                  tabIndex={0}
+                  title={workspace.repos.join('\n')}
+                  onClick={() => onOpenWorkspace(workspace)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') onOpenWorkspace(workspace)
                   }}
                 >
-                  ×
-                </Button>
-              </div>
-            ))}
-          </>
-        )}
-        <div className="side-sec">
-          Repositories
-          <span className="counter">{filtered.length}</span>
-          <Button
-            className="ghost tiny"
-            title="Select all visible"
-            onClick={() => setPicked(filtered.map((r) => r.path))}
-          >
-            all
-          </Button>
-          {picked.length > 0 && (
-            <Button className="ghost tiny" title="Clear selection" onClick={() => setPicked([])}>
-              none
-            </Button>
+                  <span className="ws-dot" style={{ background: workspace.color }} />
+                  <span className="label">{workspace.name}</span>
+                  <span className="counter">{workspace.repos.length}</span>
+                  <span className="row-tools">
+                    <Button
+                      variant="icon"
+                      aria-label={`Edit ${workspace.name}`}
+                      title="Edit workspace"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onEditWorkspace(workspace)
+                      }}
+                    >
+                      <Pencil size={12} />
+                    </Button>
+                    <Button
+                      variant="icon"
+                      className="danger"
+                      aria-label={`Delete ${workspace.name}`}
+                      title="Delete workspace"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void window.spoon.app
+                          .confirm(`Delete workspace “${workspace.name}”?`, 'Repositories stay on disk and in the list.')
+                          .then((ok) => {
+                            if (ok) onDeleteWorkspace(workspace.id)
+                          })
+                      }}
+                    >
+                      <X size={12} />
+                    </Button>
+                  </span>
+                </div>
+              ))}
+            </section>
           )}
-        </div>
-        {filtered.map((r) => {
-          const o = overviews[r.path]
-          const on = picked.includes(r.path)
-          const checking = analyzing.has(r.path) || !o
-          return (
-            <div
-              key={r.path}
-              className={`side-item repo-row ${sel === r.path ? 'active' : ''} ${on ? 'picked' : ''}`}
-              title={r.path}
-              role="button" tabIndex={0}
-              onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSel(r.path); setPicked([]) } }}
-              onClick={(e) => clickRepo(e, r.path)}
-              onDoubleClick={() => onOpen(r.path, r.name)}
-              onContextMenu={(event) => {
-                event.preventDefault()
-                openRepoMenu(r.path)
-              }}
-            >
-              <span
-                className={`dot ${dotTone(o)}${pinned.includes(r.path) ? ' pin' : ''}`}
-                title={checking ? 'Analyzing...' : dotTitle(o, pinned.includes(r.path))}
-              />
-              <span className="label">{r.name}</span>
-              <RepoBadges overview={o} compact analyzing={checking} />
+          <section className="home-side-group" aria-label="Repository list">
+            <div className="side-sec">
+              <span>Repositories</span>
+              <span className="counter">{filtered.length}</span>
+              <span className="side-sec-tools">
+                {picked.length > 0 ? (
+                  <Button variant="link" title="Clear selection" onClick={() => setPicked([])}>
+                    Clear ({picked.length})
+                  </Button>
+                ) : (
+                  <Button variant="link" title="Select all visible" onClick={() => setPicked(filtered.map((r) => r.path))}>
+                    Select all
+                  </Button>
+                )}
+              </span>
             </div>
-          )
-        })}
-        {!filtered.length && (
-          <div className="empty">{recent.length ? emptyFilterLabel(statusFilter, !!q.trim()) : 'No repositories yet'}</div>
-        )}
-      </div>
+            {filtered.map((r) => {
+              const o = overviews[r.path]
+              const on = picked.includes(r.path)
+              const checking = analyzing.has(r.path) || !o
+              const isPinned = pinned.includes(r.path)
+              return (
+                <div
+                  key={r.path}
+                  className={`side-item repo-row ${sel === r.path ? 'active' : ''} ${on ? 'picked' : ''} ${checking ? 'working' : ''}`}
+                  title={r.path}
+                  role="button"
+                  tabIndex={0}
+                  aria-current={sel === r.path || undefined}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault()
+                      setSel(r.path)
+                      setPicked([])
+                    }
+                  }}
+                  onClick={(e) => clickRepo(e, r.path)}
+                  onDoubleClick={() => onOpen(r.path, r.name)}
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    openRepoMenu(r.path)
+                  }}
+                >
+                  <span className="dot-wrap" title={checking ? 'Analyzing...' : dotTitle(o, isPinned)}>
+                    <span className={`dot ${dotTone(o)}`} />
+                  </span>
+                  <span className="label">{r.name}</span>
+                  {isPinned && <IcoPin filled />}
+                  <RepoMetrics overview={o} analyzing={checking} />
+                </div>
+              )
+            })}
+            {!filtered.length && (
+              <div className="home-side-empty">
+                {recent.length ? emptyFilterLabel(statusFilter, !!q.trim()) : 'No repositories yet'}
+              </div>
+            )}
+          </section>
+        </div>
+      </aside>
       <div
         className="splitbar x"
         onPointerDown={(e) =>
           bindDrag(
             e,
             'x',
-            (x) => onResize(clamp(x, 180, 480)),
-            (x) => onResizeEnd(clamp(x, 180, 480))
+            (x) => onResize(clamp(x, 200, 480)),
+            (x) => onResizeEnd(clamp(x, 200, 480))
           )
         }
       />
-      <div className="mgr-main">
-        <section className="flow-hero">
-          <div className="flow-hero-copy">
-            <span className="eyebrow"><IcoAi /> A LITTLE LESS REPETITION</span>
-            <h1>More time for<br /><span>your next idea.</span></h1>
-            <p>Your repositories, branches and AI.<br />One place to keep your code moving.</p>
-            <Button className="primary ico-text" onClick={onAdd}><IcoAddRepo /> Add a repository <span aria-hidden="true">↗</span></Button>
-          </div>
-          <div className="flow-art" aria-hidden="true">
-            <svg viewBox="0 0 380 190" className="flow-wires">
-              <path d="M74 48H140Q162 48 162 70V94H216M74 140H140Q162 140 162 118V94M244 94H300Q322 94 322 116V145" />
-              <circle cx="162" cy="94" r="5" /><circle cx="322" cy="145" r="5" />
-            </svg>
-            <div className="flow-folder folder-one"><IcoOpen /><span>app</span><i /></div>
-            <div className="flow-folder folder-two"><IcoOpen /><span>web</span><i /></div>
-            <div className="flow-spark"><IcoAi /></div>
-            <div className="flow-branch"><IcoBranch /><span>main</span><div className="mini-graph"><i /><i /><i /></div><div className="mini-lines"><i /><i /><i /></div></div>
-          </div>
-        </section>
-        <header className="mgr-head">
-          <div className="mgr-title">
-            <div className="spoon-mark" aria-hidden>
-              <SpoonMark />
+      <main className="mgr-main home-main">
+        <div className="home-inner">
+          <header className="home-head">
+            <div className="home-title">
+              <span className="home-eyebrow">{greeting}</span>
+              <h1>Home</h1>
+              <p className="home-sub">
+                {totalRepos
+                  ? `${totalRepos} repositor${totalRepos === 1 ? 'y' : 'ies'}${workspaces.length ? ` · ${workspaces.length} workspace${workspaces.length === 1 ? '' : 's'}` : ''}${attention ? ` · ${attention} need${attention === 1 ? 's' : ''} attention` : ''}`
+                  : 'Add your first repository to get started.'}
+              </p>
             </div>
-            <div className="mgr-title-copy">
-              <span className="eyebrow">YOUR WORKSPACE</span>
-              <h2>Repositories</h2>
-              <div className="stat-row" role="toolbar" aria-label="Filter repositories by status">
-                <StatChip
-                  id="all"
-                  count={counts.total}
-                  label="repos"
-                  hint="Show all repositories"
-                  active={statusFilter === 'all'}
-                  onClick={toggleFilter}
-                />
-                <StatChip
-                  id="dirty"
-                  count={counts.dirty}
-                  label="dirty"
-                  tone="warn"
-                  hint="Show repositories with uncommitted changes"
-                  active={statusFilter === 'dirty'}
-                  onClick={toggleFilter}
-                />
-                <StatChip
-                  id="behind"
-                  count={counts.behind}
-                  label="behind"
-                  tone="info"
-                  hint="Show repositories behind their remote"
-                  active={statusFilter === 'behind'}
-                  onClick={toggleFilter}
-                />
-                <StatChip
-                  id="ahead"
-                  count={counts.ahead}
-                  label="to push"
-                  tone="info"
-                  hint="Show repositories with commits to push"
-                  active={statusFilter === 'ahead'}
-                  onClick={toggleFilter}
-                />
-                <StatChip
-                  id="blocked"
-                  count={counts.broken}
-                  label="blocked"
-                  tone="err"
-                  hint="Show repositories that need attention"
-                  active={statusFilter === 'blocked'}
-                  onClick={toggleFilter}
-                />
-              </div>
-            </div>
-          </div>
-          <div className="mgr-toolbar">
-            <div className="mgr-tool-seg" role="toolbar" aria-label="Add repositories">
-              <IconAct label="Clone" hint="Clone from a Git URL" onClick={onClone}>
-                <IcoClone />
-              </IconAct>
-              <IconAct label="Add" hint="Add a Git folder, or find every repo inside it" onClick={onAdd}>
-                <IcoAddRepo />
-              </IconAct>
-              <IconAct label="New" hint="Create a new repository" onClick={onInit}>
-                <IcoCreate />
-              </IconAct>
-              <IconAct label="Scan" hint="Find every Git repo inside the folders you pick" onClick={() => void scanFolders()}>
-                <IcoScan />
-              </IconAct>
-              <IconAct
-                label="Rescan"
-                hint="Rescan watched folders"
+            <div className="home-actions" role="toolbar" aria-label="Add repositories">
+              <Button
+                variant="icon"
+                className="home-icon-btn"
+                title="Rescan watched folders"
+                aria-label="Rescan watched folders"
+                aria-busy={busy === 'rescan' || undefined}
                 disabled={!settings?.watchedRoots?.length || !!busy}
-                busy={busy === 'rescan'}
                 onClick={() => void rescan()}
               >
                 <IcoRefresh />
-              </IconAct>
+              </Button>
+              <Button variant="secondary" title="Find every Git repo inside the folders you pick" onClick={() => void scanFolders()}>
+                <IcoScan />
+                Scan folders
+              </Button>
+              <Button variant="secondary" title="Create a new repository" onClick={onInit}>
+                <IcoCreate />
+                New
+              </Button>
+              <Button variant="secondary" title="Add a Git folder, or find every repo inside it" onClick={onAdd}>
+                <IcoAddRepo />
+                Add
+              </Button>
+              <Button variant="primary" className="primary" title="Clone from a Git URL" onClick={onClone}>
+                <IcoClone />
+                Clone
+              </Button>
             </div>
-            <div className="mgr-tool-sep" aria-hidden />
-            <div className="mgr-tool-seg" role="toolbar" aria-label={`Sync ${actionHint}`}>
-              <IconAct
-                label="Refresh"
-                hint={`Refresh status of ${actionHint}`}
-                disabled={!!busy || !actionCount}
-                busy={busy === 'refresh'}
-                onClick={() => void runBulk('refresh')}
-              >
-                <IcoRefresh />
-              </IconAct>
-              <IconAct
-                label="Fetch"
-                hint={`Fetch remotes for ${actionHint}`}
-                disabled={!!busy || !actionCount}
-                busy={busy === 'fetch'}
-                onClick={() => void runBulk('fetch')}
-              >
-                <IcoFetch />
-              </IconAct>
-              <IconAct
-                label="Pull"
-                hint={`Pull ${actionHint}`}
-                disabled={!!busy || !actionCount}
-                busy={busy === 'pull'}
-                onClick={() => void runBulk('pull')}
-              >
-                <IcoPull />
-              </IconAct>
-              <IconAct
-                label="Push"
-                hint={`Push ${actionHint}`}
-                disabled={!!busy || !actionCount}
-                busy={busy === 'push'}
-                onClick={() => void runBulk('push')}
-              >
-                <IcoPush />
-              </IconAct>
+          </header>
+
+          {totalRepos > 0 && (
+          <section className="home-overview" aria-label="Repository status">
+            <div className="stat-row" role="toolbar" aria-label="Filter repositories by status">
+              <StatChip id="all" count={counts.total} label="Repositories" hint="Show all repositories" active={statusFilter === 'all'} onClick={toggleFilter} />
+              <StatChip id="dirty" count={counts.dirty} label="Uncommitted" tone="warn" hint="Show repositories with uncommitted changes" active={statusFilter === 'dirty'} onClick={toggleFilter} />
+              <StatChip id="behind" count={counts.behind} label="Behind" tone="info" hint="Show repositories behind their remote" active={statusFilter === 'behind'} onClick={toggleFilter} />
+              <StatChip id="ahead" count={counts.ahead} label="To push" tone="info" hint="Show repositories with commits to push" active={statusFilter === 'ahead'} onClick={toggleFilter} />
+              <StatChip id="blocked" count={counts.broken} label="Attention" tone="err" hint="Show repositories that need attention" active={statusFilter === 'blocked'} onClick={toggleFilter} />
             </div>
-          </div>
-        </header>
-        {scan ? (
-          <p className="hint mgr-status" title={scan} role="status">
-            {scan}
-          </p>
-        ) : null}
-
-        {bulk && <BulkSummary results={bulk} onClear={() => setBulk(null)} />}
-
-        {many ? (
-          <div className="repo-card pop-in">
-            <div className="repo-card-top">
-              <div className="repo-id">
-                <span className="repo-mark" aria-hidden>
-                  {picked.length}
-                </span>
-                <div className="repo-id-copy">
-                  <h2>{picked.length} repositories selected</h2>
-                  <div className="hint">Ctrl-click to pick several · Shift-click a range</div>
-                </div>
+            <div className="home-sync" role="toolbar" aria-label={`Sync ${actionHint}`}>
+              <span className="home-sync-label">
+                Sync <b>{picked.length ? `${picked.length} selected` : `${filtered.length} shown`}</b>
+              </span>
+              <div className="home-seg">
+                <SyncBtn label="Refresh" hint={`Refresh status of ${actionHint}`} disabled={!!busy || !actionCount} busy={busy === 'refresh'} onClick={() => void runBulk('refresh')}>
+                  <IcoRefresh />
+                </SyncBtn>
+                <SyncBtn label="Fetch" hint={`Fetch remotes for ${actionHint}`} disabled={!!busy || !actionCount} busy={busy === 'fetch'} onClick={() => void runBulk('fetch')}>
+                  <IcoFetch />
+                </SyncBtn>
+                <SyncBtn label="Pull" hint={`Pull ${actionHint}`} disabled={!!busy || !actionCount} busy={busy === 'pull'} onClick={() => void runBulk('pull')}>
+                  <IcoPull />
+                </SyncBtn>
+                <SyncBtn label="Push" hint={`Push ${actionHint}`} disabled={!!busy || !actionCount} busy={busy === 'push'} onClick={() => void runBulk('push')}>
+                  <IcoPush />
+                </SyncBtn>
               </div>
-              <div className="repo-actions">
-                <Button className="primary ico-text" type="button" onClick={() => onOpenSelection(picked)}>
-                  <IcoWorkspaces />
-                  Open workspace
-                </Button>
-                <div className="repo-act-group" role="toolbar" aria-label="Sync selected">
-                  <IconAct bare label="Fetch" hint="Fetch selected" disabled={!!busy} onClick={() => void runBulk('fetch')}>
-                    <IcoFetch />
-                  </IconAct>
-                  <IconAct bare label="Pull" hint="Pull selected" disabled={!!busy} onClick={() => void runBulk('pull')}>
-                    <IcoPull />
-                  </IconAct>
-                  <IconAct bare label="Push" hint="Push selected" disabled={!!busy} onClick={() => void runBulk('push')}>
-                    <IcoPush />
-                  </IconAct>
-                  <IconAct
-                    bare
-                    label="Refresh"
-                    hint="Refresh selected"
-                    disabled={!!busy}
-                    busy={busy === 'refresh'}
-                    onClick={() => void runBulk('refresh')}
-                  >
-                    <IcoRefresh />
-                  </IconAct>
+            </div>
+          </section>
+          )}
+
+          {scan ? (
+            <p className={`home-notice${busy || scan.endsWith('...') ? ' working' : ''}`} title={scan} role="status">
+              {scan}
+              <Button variant="icon" aria-label="Dismiss" onClick={() => setScan('')}>
+                <X size={12} />
+              </Button>
+            </p>
+          ) : null}
+
+          {bulk && <BulkSummary results={bulk} onClear={() => setBulk(null)} />}
+
+          {many ? (
+            <section className="home-card repo-card pop-in" aria-label="Selected repositories">
+              <div className="repo-card-top">
+                <div className="repo-id">
+                  <span className="repo-mark multi" aria-hidden>
+                    {picked.length}
+                  </span>
+                  <div className="repo-id-copy">
+                    <h2>{picked.length} repositories selected</h2>
+                    <div className="hint">Ctrl-click to pick several · Shift-click a range</div>
+                  </div>
                 </div>
-                <div className="repo-act-group" role="toolbar" aria-label="Organize selected">
-                  <IconAct bare label="Save workspace" hint="Save the selection as a workspace" onClick={() => onSaveWorkspace(picked)}>
-                    <IcoSave />
-                  </IconAct>
-                  {unsafePicked.length > 0 && (
-                    <IconAct
-                      bare
-                      label="Mark safe"
-                      hint={`Mark ${unsafePicked.length} as safe`}
-                      disabled={!!busy}
-                      busy={busy === 'safe'}
-                      onClick={() => void markSafe(unsafePicked)}
-                    >
-                      <IcoShield />
+                <div className="repo-actions">
+                  <div className="home-seg" role="toolbar" aria-label="Organize selected">
+                    <IconAct bare label="Save workspace" hint="Save the selection as a workspace" onClick={() => onSaveWorkspace(picked)}>
+                      <IcoSave />
                     </IconAct>
-                  )}
-                  <IconAct bare label="Pin" hint="Pin selected" pressed onClick={() => void pinPicked(true)}>
-                    <IcoPin filled />
-                  </IconAct>
-                  <IconAct bare label="Unpin" hint="Unpin selected" onClick={() => void pinPicked(false)}>
-                    <IcoUnpin />
-                  </IconAct>
-                  <IconAct bare label="Remove" hint="Remove selected from the list" danger onClick={() => void removePicked()}>
-                    <IcoTrash />
-                  </IconAct>
-                </div>
-              </div>
-            </div>
-            <ul className="picked-list">
-              {picked.map((path) => {
-                const repo = recent.find((r) => r.path === path)
-                const checking = analyzing.has(path) || !overviews[path]
-                return (
-                  <li key={path}>
-                    <Button className="linkish" onClick={() => setSel(path)}>
-                      {repo?.name ?? path}
-                    </Button>
-                    <RepoBadges overview={overviews[path]} compact analyzing={checking} />
-                  </li>
-                )
-              })}
-            </ul>
-          </div>
-        ) : current ? (
-          <div className="repo-card pop-in">
-            <div className="repo-card-top">
-              <div className="repo-id">
-                <span className="repo-mark" aria-hidden style={{ background: avatarColor(current.path) }}>
-                  {initials(current.name.replace(/[-_]+/g, ' '))}
-                </span>
-                <div className="repo-id-copy">
-                  <div className="repo-name-row">
-                    <h2 title={current.name}>{current.name}</h2>
-                    <RepoBadges overview={overview} analyzing={analyzing.has(current.path) || !overview} />
-                  </div>
-                  <div className="hint path" title={current.path}>
-                    {current.path}
-                  </div>
-                  <div className="repo-meta">
-                    <span className="branch-pill" title={overview?.branch}><IcoBranch />
-                      {overview?.branch ? (overview.detached ? 'detached HEAD' : overview.branch) : '...'}
-                    </span>
-                    {overview?.lastCommit && (
-                      <span className="last-commit" title={overview.lastCommit.subject}>
-                        {overview.lastCommit.subject}
-                      </span>
+                    {unsafePicked.length > 0 && (
+                      <IconAct bare label="Mark safe" hint={`Mark ${unsafePicked.length} as safe`} disabled={!!busy} busy={busy === 'safe'} onClick={() => void markSafe(unsafePicked)}>
+                        <IcoShield />
+                      </IconAct>
                     )}
-                    <span className="opened">Opened {current.lastOpened ? formatAgo(current.lastOpened) : 'never'}</span>
+                    <IconAct bare label="Pin" hint="Pin selected" onClick={() => void pinPicked(true)}>
+                      <IcoPin filled />
+                    </IconAct>
+                    <IconAct bare label="Unpin" hint="Unpin selected" onClick={() => void pinPicked(false)}>
+                      <IcoUnpin />
+                    </IconAct>
+                    <IconAct bare label="Remove" hint="Remove selected from the list" danger onClick={() => void removePicked()}>
+                      <IcoTrash />
+                    </IconAct>
                   </div>
+                  <Button className="primary ico-text" variant="primary" onClick={() => onOpenSelection(picked)}>
+                    <IcoWorkspaces />
+                    Open workspace
+                  </Button>
                 </div>
               </div>
-              <div className="repo-actions">
-                <Button
-                  className="primary ico-text"
-                  type="button"
-                  onClick={() => onOpen(current.path, current.name)}
-                >
-                  <IcoHome />
-                  Open
+              <ul className="picked-list">
+                {picked.map((path) => {
+                  const repo = recent.find((r) => r.path === path)
+                  const checking = analyzing.has(path) || !overviews[path]
+                  return (
+                    <li key={path} className={checking ? 'working' : undefined}>
+                      <span className="repo-mark sm" aria-hidden style={{ background: avatarColor(path) }}>
+                        {initials((repo?.name ?? path).replace(/[-_]+/g, ' '))}
+                      </span>
+                      <Button className="linkish" variant="link" onClick={() => setSel(path)}>
+                        {repo?.name ?? path}
+                      </Button>
+                      <RepoBadges overview={overviews[path]} compact analyzing={checking} />
+                    </li>
+                  )
+                })}
+              </ul>
+            </section>
+          ) : recent.length ? null : (
+            <section className="home-card home-empty">
+              <div className="home-empty-mark" aria-hidden>
+                <SpoonMark />
+              </div>
+              <h2>No repositories yet</h2>
+              <p>Clone a remote, add a folder you already have, or scan a directory to find every Git repository inside it.</p>
+              <div className="home-empty-actions">
+                <Button variant="primary" className="primary" onClick={onClone}>
+                  <IcoClone />
+                  Clone repository
                 </Button>
-                <div className="repo-act-group" role="toolbar" aria-label="Open repository externally">
-                  <IconAct
-                    bare
-                    label={defaultOpen?.label || 'Open with'}
-                    hint={
-                      defaultOpen
-                        ? `Open with ${defaultOpen.label} (${defaultOpen.kind.toUpperCase()}). Right-click or use ▾ for more.`
-                        : 'Choose how to open this repository'
-                    }
-                    onClick={() => {
-                      if (!defaultOpen) {
-                        openWithMenu(current.path)
-                        return
-                      }
-                      void window.spoon.app.openWith(current.path, defaultOpen.id)
-                    }}
-                    onContextMenu={(event) => {
-                      event.preventDefault()
-                      openWithMenu(current.path)
-                    }}
-                  >
-                    <IcoCode />
-                  </IconAct>
-                  <IconAct bare label="Open with…" hint="Choose IDE, agent, or CLI" onClick={() => openWithMenu(current.path)}>
-                    <IcoChevron />
-                  </IconAct>
-                  <IconAct
-                    bare
-                    label="Explorer"
-                    hint="Reveal in file explorer"
-                    onClick={() => void window.spoon.app.openWith(current.path, 'explorer')}
-                  >
-                    <IcoOpen />
-                  </IconAct>
-                </div>
-                <div className="repo-act-group" role="toolbar" aria-label="Organize">
-                  <IconAct
-                    bare
-                    label={pinned.includes(current.path) ? 'Unpin' : 'Pin'}
-                    hint={pinned.includes(current.path) ? 'Unpin this repository' : 'Pin this repository'}
-                    pressed={pinned.includes(current.path)}
-                    onClick={() => void togglePin(current.path)}
-                  >
-                    <IcoPin filled={pinned.includes(current.path)} />
-                  </IconAct>
-                  <IconAct
-                    bare
-                    label="Remove"
-                    hint="Remove from the list"
-                    danger
-                    onClick={() => void removeRepo(current.path)}
-                  >
-                    <IcoTrash />
-                  </IconAct>
-                </div>
+                <Button variant="secondary" onClick={onAdd}>
+                  <IcoAddRepo />
+                  Add existing
+                </Button>
+                <Button variant="secondary" onClick={() => void scanFolders()}>
+                  <IcoScan />
+                  Scan folders
+                </Button>
               </div>
-            </div>
-            {(analyzing.has(current.path) || !overview) && (
-              <p className="hint">{overview ? 'Refreshing repository status...' : 'Analyzing...'}</p>
-            )}
-            {overview?.error && <div className="banner warn">{overview.error}</div>}
-            <HealthList
-              health={health}
-              onFix={(id) => void applyFix(current.path, id)}
-              onFixSafe={() => health && void autoFix(current.path, health.issues)}
-              onDeep={async () => {
-                setHealth((await window.spoon.repo.health(current.path, true)) as RepoHealth)
+            </section>
+          )}
+
+          {recent.length > 0 && (
+            <RecentWork
+              recent={recent}
+              overviews={overviews}
+              selected={sel}
+              onSelect={(path) => {
+                setSel(path)
+                setPicked([])
               }}
+              onOpen={onOpen}
+              onClone={onClone}
             />
-          </div>
-        ) : (
-          <div className="mgr-stage">
-            <p className="empty-hero">Clone, add, or scan a folder to get started.</p>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      </main>
     </div>
+  )
+}
+
+function homeGreeting(): string {
+  const hour = new Date().getHours()
+  if (hour < 5) return 'Working late'
+  if (hour < 12) return 'Good morning'
+  if (hour < 19) return 'Good afternoon'
+  return 'Good evening'
+}
+
+function syncLabel(o: RepoOverview): string {
+  if (!o.upstream && !o.ahead && !o.behind) return o.remoteUrl ? 'Up to date' : 'Local only'
+  const bits: string[] = []
+  if (o.ahead) bits.push(`${o.ahead} to push`)
+  if (o.behind) bits.push(`${o.behind} to pull`)
+  return bits.length ? bits.join(' · ') : 'Up to date'
+}
+
+function SyncBtn({
+  label,
+  hint,
+  children,
+  onClick,
+  disabled,
+  busy
+}: {
+  label: string
+  hint: string
+  children: ReactNode
+  onClick: () => void
+  disabled?: boolean
+  busy?: boolean
+}) {
+  return (
+    <Button
+      variant="segment"
+      className={`home-sync-btn${busy ? ' busy' : ''}`}
+      title={hint}
+      aria-label={hint}
+      aria-busy={busy || undefined}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {children}
+      <span>{label}</span>
+    </Button>
+  )
+}
+
+function RepoMetrics({ overview, analyzing }: { overview?: RepoOverview; analyzing?: boolean }) {
+  if (!overview) return <span className="metrics"><span className="metric working">···</span></span>
+  const items: { key: string; text: string; cls: string; title: string }[] = []
+  if (overview.unsafe) items.push({ key: 'u', text: 'unsafe', cls: 'err', title: 'Git does not trust this folder' })
+  else if (overview.error) items.push({ key: 'e', text: 'error', cls: 'err', title: overview.error })
+  if (overview.operation) items.push({ key: 'o', text: overview.operation, cls: 'warn', title: `${overview.operation} in progress` })
+  if (overview.conflicts) items.push({ key: 'c', text: `!${overview.conflicts}`, cls: 'err', title: `${overview.conflicts} conflict(s)` })
+  const dirty = overview.staged + overview.unstaged + overview.untracked
+  if (dirty) items.push({ key: 'd', text: `●${dirty}`, cls: 'warn', title: `${dirty} changed` })
+  if (overview.behind) items.push({ key: 'b', text: `↓${overview.behind}`, cls: 'info', title: `${overview.behind} behind` })
+  if (overview.ahead) items.push({ key: 'a', text: `↑${overview.ahead}`, cls: 'info', title: `${overview.ahead} ahead` })
+  if (!items.length && !analyzing) return null
+  return (
+    <span className={`metrics${analyzing ? ' working' : ''}`}>
+      {items.map((item) => (
+        <span key={item.key} className={`metric ${item.cls}`} title={item.title}>
+          {item.text}
+        </span>
+      ))}
+    </span>
   )
 }
 
@@ -960,7 +934,11 @@ function StatChip({
       disabled={empty}
       onClick={() => onClick(id)}
     >
-      <b>{count}</b> {label}
+      <span className="stat-label">
+        <i className="stat-dot" aria-hidden />
+        {label}
+      </span>
+      <b>{count}</b>
     </Button>
   )
 }
@@ -1199,14 +1177,14 @@ function RepoBadges({
   if (!overview) {
     return compact ? (
       <span className="badges">
-        <span className="chip">Analyzing...</span>
+        <span className="chip working">Analyzing...</span>
       </span>
     ) : (
-      <span className="hint">Analyzing...</span>
+      <span className="hint working">Analyzing...</span>
     )
   }
   const bits: { key: string; label: string; cls: string }[] = []
-  if (analyzing) bits.push({ key: 'scan', label: 'Analyzing...', cls: '' })
+  if (analyzing) bits.push({ key: 'scan', label: 'Analyzing...', cls: 'working' })
   if (overview.unsafe) bits.push({ key: 'unsafe', label: 'unsafe', cls: 'err' })
   else if (overview.error) bits.push({ key: 'err', label: 'error', cls: 'err' })
   if (overview.operation) bits.push({ key: 'op', label: overview.operation, cls: 'warn' })

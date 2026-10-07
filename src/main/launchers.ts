@@ -30,10 +30,9 @@ export function clearLauncherCache(): void {
 
 async function resolveCommand(spec: LauncherSpec): Promise<string | undefined> {
   if (spec.mode === 'terminal' || spec.mode === 'explorer') return spec.id
-  for (const bin of spec.bins) {
-    if (await which(bin)) return bin
-  }
-  return undefined
+  // Probe every candidate at once, then keep the catalog's preference order.
+  const found = await Promise.all(spec.bins.map((bin) => which(bin)))
+  return spec.bins[found.indexOf(true)]
 }
 
 export async function listLaunchers(force = false): Promise<{
@@ -41,12 +40,12 @@ export async function listLaunchers(force = false): Promise<{
   defaultId: string
 }> {
   if (force) clearLauncherCache()
-  const launchers: LauncherInfo[] = []
-  for (const spec of LAUNCHER_CATALOG) {
-    const command = await resolveCommand(spec)
+  const commands = await Promise.all(LAUNCHER_CATALOG.map((spec) => resolveCommand(spec)))
+  const launchers: LauncherInfo[] = LAUNCHER_CATALOG.map((spec, index) => {
+    const command = commands[index]
     const available = spec.mode === 'terminal' || spec.mode === 'explorer' || !!command
-    launchers.push({ ...spec, available, command })
-  }
+    return { ...spec, available, command }
+  })
   return { launchers, defaultId: resolveDefaultId(launchers) }
 }
 
