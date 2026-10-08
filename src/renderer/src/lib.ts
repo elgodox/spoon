@@ -186,3 +186,11 @@ export async function catchErr(fn: () => Promise<void>): Promise<void> {
     await window.spoon.app.error(e instanceof Error ? e.message : String(e))
   }
 }
+
+/** Lowercase extension used to group changed files by type ("(none)" when there is no extension). */
+export function fileType(path: string): string {
+  const name = path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1)
+  const dot = name.lastIndexOf('.')
+  if (dot < 0 || dot === name.length - 1) return '(none)'
+  return name.slice(dot).toLowerCase()
+}

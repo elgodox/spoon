@@ -90,6 +90,7 @@ import {
   catchErr,
   clamp,
   fileName,
+  fileType,
   formatAgo,
   formatDate,
   joinRepoPath,
@@ -1681,6 +1682,7 @@ function Workspace({
   const [stagedFocus, setStagedFocus] = useState(false)
   const [unstagedSel, setUnstagedSel] = useState<string[]>([])
   const [stagedSel, setStagedSel] = useState<string[]>([])
+  const [typeFilter, setTypeFilter] = useState<string[]>([])
   const [fileAnchor, setFileAnchor] = useState<string | null>(null)
   const [diffs, setDiffs] = useState<FileDiff[]>([])
   const [commitDiffs, setCommitDiffs] = useState<FileDiff[]>([])
@@ -1759,16 +1761,43 @@ function Workspace({
     void window.spoon.git.diff(path, opts).then((d) => setDiffs(d as FileDiff[]))
   }, [path, file, stagedFocus, showingChanges, snap.status.stagedCount, snap.status.unstagedCount, settings?.ignoreWhitespace])
 
+  const shownUnstaged = useMemo(
+    () => (settings?.hideUntracked ? snap.status.unstaged.filter((f) => !f.untracked) : snap.status.unstaged),
+    [snap.status.unstaged, settings?.hideUntracked]
+  )
+  // File types come from whatever is changed right now, so the choices always match the lists.
+  const changeTypes = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const f of [...shownUnstaged, ...snap.status.staged]) {
+      const type = fileType(f.path)
+      counts.set(type, (counts.get(type) ?? 0) + 1)
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  }, [shownUnstaged, snap.status.staged])
+  const activeTypes = useMemo(
+    () => typeFilter.filter((type) => changeTypes.some(([t]) => t === type)),
+    [typeFilter, changeTypes]
+  )
+  const visibleUnstaged = useMemo(
+    () => (activeTypes.length ? shownUnstaged.filter((f) => activeTypes.includes(fileType(f.path))) : shownUnstaged),
+    [shownUnstaged, activeTypes]
+  )
+  const visibleStaged = useMemo(
+    () => (activeTypes.length ? snap.status.staged.filter((f) => activeTypes.includes(fileType(f.path))) : snap.status.staged),
+    [snap.status.staged, activeTypes]
+  )
+
   useEffect(() => {
-    const unstaged = new Set(
-      (settings?.hideUntracked ? snap.status.unstaged.filter((f) => !f.untracked) : snap.status.unstaged).map((f) => f.path)
-    )
+    const unstaged = new Set(shownUnstaged.map((f) => f.path))
     const staged = new Set(snap.status.staged.map((f) => f.path))
-    setUnstagedSel((prev) => prev.filter((p) => unstaged.has(p)))
-    setStagedSel((prev) => prev.filter((p) => staged.has(p)))
+    const unstagedShown = new Set(visibleUnstaged.map((f) => f.path))
+    const stagedShown = new Set(visibleStaged.map((f) => f.path))
+    // Selecting a file and then filtering it away must not leave it selected out of sight.
+    setUnstagedSel((prev) => prev.filter((p) => unstagedShown.has(p)))
+    setStagedSel((prev) => prev.filter((p) => stagedShown.has(p)))
     // A stashed, discarded, or committed file has nothing left to show.
     setFile((prev) => (prev && !unstaged.has(prev) && !staged.has(prev) ? null : prev))
-  }, [snap.status.unstaged, snap.status.staged, settings?.hideUntracked])
+  }, [shownUnstaged, visibleUnstaged, visibleStaged, snap.status.staged])
 
   useEffect(() => {
     let current = true
@@ -2069,11 +2098,7 @@ function Workspace({
   }
 
   function selectFiles(target: string, staged: boolean, keys: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) {
-    const rows = staged
-      ? snap.status.staged
-      : settings?.hideUntracked
-        ? snap.status.unstaged.filter((f) => !f.untracked)
-        : snap.status.unstaged
+    const rows = staged ? visibleStaged : visibleUnstaged
     const paths = rows.map((f) => f.path)
     setStagedFocus(staged)
     setFile(target)
@@ -2501,20 +2526,43 @@ function Workspace({
             <div className="history-heading changes-heading"><div><span className="eyebrow">REPOSITORY</span><h2>Working changes <span>{snap.status.unstagedCount + snap.status.stagedCount}</span></h2></div><div className="history-context"><Avatar email={snap.identity.email} name={snap.identity.name} /><span className="branch-pill"><IcoBranch /> {snap.status.branch}</span></div></div>
           <div className="changes">
             <div className="file-cols" style={{ width: filesW }}>
+              {changeTypes.length > 1 && (
+                <div className="type-filter" role="group" aria-label="Filter changes by file type">
+                  <button
+                    type="button"
+                    className={`type-chip${activeTypes.length ? '' : ' on'}`}
+                    aria-pressed={!activeTypes.length}
+                    onClick={() => setTypeFilter([])}
+                  >
+                    All
+                  </button>
+                  {changeTypes.map(([type, count]) => (
+                    <button
+                      type="button"
+                      key={type}
+                      className={`type-chip${activeTypes.includes(type) ? ' on' : ''}`}
+                      aria-pressed={activeTypes.includes(type)}
+                      title={`Show only ${type} files`}
+                      onClick={() =>
+                        setTypeFilter(activeTypes.includes(type) ? activeTypes.filter((t) => t !== type) : [...activeTypes, type])
+                      }
+                    >
+                      {type} <span>{count}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
               <FilePane
                 title="Unstaged"
-                action={unstagedSel.length > 1 ? `Stage ${unstagedSel.length}` : 'Stage'}
+                action={unstagedSel.length > 1 ? `Stage ${unstagedSel.length}` : activeTypes.length ? 'Stage shown' : 'Stage'}
                 onAction={() =>
-                  void doStage(unstagedSel.length ? unstagedSel : snap.status.unstaged.map((f) => f.path))
+                  void doStage(unstagedSel.length ? unstagedSel : visibleUnstaged.map((f) => f.path))
                 }
-                files={settings?.hideUntracked ? snap.status.unstaged.filter((f) => !f.untracked) : snap.status.unstaged}
+                files={visibleUnstaged}
                 selected={unstagedSel}
                 onSelect={(p, keys) => selectFiles(p, false, keys)}
                 onSelectAll={() => {
-                  const rows = settings?.hideUntracked
-                    ? snap.status.unstaged.filter((f) => !f.untracked)
-                    : snap.status.unstaged
-                  setUnstagedSel(rows.map((f) => f.path))
+                  setUnstagedSel(visibleUnstaged.map((f) => f.path))
                   setStagedFocus(false)
                 }}
                 onContext={(entry, event) => fileMenu(entry, false, event)}
@@ -2540,13 +2588,13 @@ function Workspace({
               />
               <FilePane
                 title="Staged"
-                action={stagedSel.length > 1 ? `Unstage ${stagedSel.length}` : 'Unstage'}
-                onAction={() => void doStage(stagedSel.length ? stagedSel : snap.status.staged.map((f) => f.path), true)}
-                files={snap.status.staged}
+                action={stagedSel.length > 1 ? `Unstage ${stagedSel.length}` : activeTypes.length ? 'Unstage shown' : 'Unstage'}
+                onAction={() => void doStage(stagedSel.length ? stagedSel : visibleStaged.map((f) => f.path), true)}
+                files={visibleStaged}
                 selected={stagedSel}
                 onSelect={(p, keys) => selectFiles(p, true, keys)}
                 onSelectAll={() => {
-                  setStagedSel(snap.status.staged.map((f) => f.path))
+                  setStagedSel(visibleStaged.map((f) => f.path))
                   setStagedFocus(true)
                 }}
                 onContext={(entry, event) => fileMenu(entry, true, event)}
