@@ -93,7 +93,7 @@ export async function findGit(): Promise<string> {
 function runGitRaw(
   cwd: string | undefined,
   args: string[],
-  opts?: { stdin?: string; git?: string; env?: NodeJS.ProcessEnv }
+  opts?: { stdin?: string; git?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }
 ): Promise<GitResult> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(opts?.git ?? gitExe, args, {
@@ -124,9 +124,20 @@ function runGitRaw(
     } else {
       child.stdin.end()
     }
-    child.on('error', reject)
+    let timedOut = false
+    const killer = opts?.timeoutMs
+      ? setTimeout(() => {
+          timedOut = true
+          child.kill()
+        }, opts.timeoutMs)
+      : null
+    child.on('error', (err) => {
+      if (killer) clearTimeout(killer)
+      reject(err)
+    })
     child.on('close', (code) => {
-      resolvePromise({ stdout, stderr, code: code ?? 1 })
+      if (killer) clearTimeout(killer)
+      resolvePromise({ stdout, stderr: timedOut ? `${stderr}\ntimed out` : stderr, code: timedOut ? 124 : (code ?? 1) })
     })
   })
 }
@@ -134,7 +145,7 @@ function runGitRaw(
 export async function git(
   cwd: string,
   args: string[],
-  opts?: { stdin?: string; allowFail?: boolean; env?: NodeJS.ProcessEnv }
+  opts?: { stdin?: string; allowFail?: boolean; env?: NodeJS.ProcessEnv; timeoutMs?: number }
 ): Promise<GitResult> {
   const r = await runGitRaw(cwd, ['-c', 'core.quotepath=false', '-c', 'i18n.logoutputencoding=utf-8', ...args], opts)
   if (r.code !== 0 && !opts?.allowFail) {
@@ -1416,9 +1427,16 @@ export async function overview(path: string): Promise<RepoOverview> {
     checkedAt: Date.now()
   }
   if (!base.exists) return { ...base, error: 'Folder not found' }
-  const st = await git(path, ['status', '--porcelain=v2', '-b', '--untracked-files=all', '--ignore-submodules=untracked'], {
-    allowFail: true
-  })
+  const statusArgs = (untracked: 'all' | 'normal') => [
+    'status',
+    '--porcelain=v2',
+    '-b',
+    `--untracked-files=${untracked}`,
+    '--ignore-submodules=untracked'
+  ]
+  let st = await git(path, statusArgs('all'), { allowFail: true, timeoutMs: 15000 })
+  // Listing every untracked file can take minutes in a folder full of unignored build output; fall back to folders.
+  if (st.code === 124) st = await git(path, statusArgs('normal'), { allowFail: true, timeoutMs: 30000 })
   if (st.code !== 0) {
     const unsafe = isDubious(st.stderr)
     return { ...base, unsafe, error: unsafe ? 'Git blocks this folder (dubious ownership)' : firstLine(st.stderr) || 'Not a Git repository' }

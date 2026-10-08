@@ -526,7 +526,6 @@ function registerIpc(): void {
         })
       )
     )
-    records.flush()
     return rows
   })
   ipcMain.handle('repo:activity', async (e, paths: string[], requestId?: string, spanDays?: number): Promise<ActivityReport> => {

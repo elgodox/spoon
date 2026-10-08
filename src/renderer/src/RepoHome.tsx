@@ -149,27 +149,30 @@ export function RepoHome({
       }
       return
     }
-    const slow = window.setTimeout(() => {
-      if (gen === overviewGen.current) markAnalyzing(paths, true)
-    }, force ? 0 : 220)
-    const chunk = 40
-    try {
-      for (let i = 0; i < paths.length; i += chunk) {
-        if (gen !== overviewGen.current) return
-        const slice = paths.slice(i, i + chunk)
-        const rows = (await window.spoon.repo.overview(slice, force)) as RepoOverview[]
-        if (gen !== overviewGen.current) return
-        setOverviews((prev) => {
-          const next = { ...prev }
-          for (const row of rows) next[row.path] = row
-          return next
-        })
-        markAnalyzing(slice, false)
+    // Only repositories being read right now count as "Analyzing"; the rest wait their turn.
+    markAnalyzing(paths, false)
+    let next = 0
+    const worker = async () => {
+      while (gen === overviewGen.current) {
+        const path = paths[next++]
+        if (path === undefined) return
+        // Cached rows come back instantly, so only flag a repo as busy if it is still running after a moment.
+        const slow = window.setTimeout(() => {
+          if (gen === overviewGen.current) markAnalyzing([path], true)
+        }, force ? 0 : 150)
+        try {
+          const [row] = (await window.spoon.repo.overview([path], force)) as RepoOverview[]
+          if (gen !== overviewGen.current) return
+          if (row) setOverviews((prev) => ({ ...prev, [row.path]: row }))
+        } catch {
+          // A failing repository must not stall the others.
+        } finally {
+          window.clearTimeout(slow)
+          markAnalyzing([path], false)
+        }
       }
-    } finally {
-      window.clearTimeout(slow)
-      if (gen === overviewGen.current) markAnalyzing(paths, false)
     }
+    await Promise.all(Array.from({ length: Math.min(6, paths.length) }, worker))
   }, [markAnalyzing, recent])
 
   useEffect(() => {
@@ -599,7 +602,7 @@ export function RepoHome({
             {filtered.map((r) => {
               const o = overviews[r.path]
               const on = picked.includes(r.path)
-              const checking = analyzing.has(r.path) || !o
+              const checking = analyzing.has(r.path)
               const isPinned = pinned.includes(r.path)
               return (
                 <div
@@ -777,7 +780,7 @@ export function RepoHome({
               <ul className="picked-list">
                 {picked.map((path) => {
                   const repo = recent.find((r) => r.path === path)
-                  const checking = analyzing.has(path) || !overviews[path]
+                  const checking = analyzing.has(path)
                   return (
                     <li key={path} className={checking ? 'working' : undefined}>
                       <span className="repo-mark sm" aria-hidden style={{ background: avatarColor(path) }}>
@@ -820,6 +823,7 @@ export function RepoHome({
             <RecentWork
               recent={recent}
               overviews={overviews}
+              analyzing={analyzing}
               selected={sel}
               onSelect={(path) => {
                 setSel(path)
@@ -1175,12 +1179,13 @@ function RepoBadges({
   analyzing?: boolean
 }) {
   if (!overview) {
+    const label = analyzing ? 'Analyzing...' : 'Waiting...'
     return compact ? (
       <span className="badges">
-        <span className="chip working">Analyzing...</span>
+        <span className={`chip${analyzing ? ' working' : ''}`}>{label}</span>
       </span>
     ) : (
-      <span className="hint working">Analyzing...</span>
+      <span className={`hint${analyzing ? ' working' : ''}`}>{label}</span>
     )
   }
   const bits: { key: string; label: string; cls: string }[] = []

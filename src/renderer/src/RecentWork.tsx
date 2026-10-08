@@ -69,6 +69,7 @@ function shade(count: number, max: number): 0 | 1 | 2 | 3 | 4 {
 export function RecentWork({
   recent,
   overviews,
+  analyzing,
   selected,
   onSelect,
   onOpen,
@@ -76,6 +77,7 @@ export function RecentWork({
 }: {
   recent: RepoSummary[]
   overviews: Record<string, RepoOverview>
+  analyzing?: Set<string>
   selected?: string
   onSelect?: (path: string) => void
   onOpen: (path: string, name?: string) => void
@@ -341,7 +343,7 @@ export function RecentWork({
                   <div className="recent-main">
                     <div className="repo-name-row">
                       <h3 title={repo.path}>{repo.name}</h3>
-                      <RecentBadges overview={overview} />
+                      <RecentBadges overview={overview} analyzing={analyzing?.has(repo.path)} />
                     </div>
                     <div className="recent-meta">
                       {branch && (
@@ -473,11 +475,11 @@ function DayStrip({ weeks, today, days }: { weeks: Date[][]; today: Date; days?:
   )
 }
 
-function RecentBadges({ overview }: { overview?: RepoOverview }) {
+function RecentBadges({ overview, analyzing }: { overview?: RepoOverview; analyzing?: boolean }) {
   if (!overview) {
     return (
       <span className="badges">
-        <span className="chip working">Analyzing...</span>
+        <span className={`chip${analyzing ? ' working' : ''}`}>{analyzing ? 'Analyzing...' : 'Waiting...'}</span>
       </span>
     )
   }
