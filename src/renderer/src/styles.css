@@ -2540,3 +2540,6 @@ html[data-pack='colored'] .primary.ai {
 
 
 }
+.stash-message { flex-wrap: nowrap; align-items: center; }
+.stash-message input { flex: 1; min-width: 0; }
+.stash-files { margin-top: 20px; }

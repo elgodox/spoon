@@ -169,7 +169,7 @@ type Overlay =
   | { type: 'remote' }
   | { type: 'remote-edit'; name: string; url: string }
   | { type: 'remote-rename'; from: string }
-  | { type: 'stash' }
+  | { type: 'stash'; files?: string[] }
   | { type: 'merge'; ref: string }
   | { type: 'rebase'; ref: string }
   | { type: 'settings'; tab?: PrefsTab }
@@ -1233,6 +1233,7 @@ export function App() {
           onReload={() => void reload()}
           onOpen={loadRepo}
           onHelp={() => setOverlay({ type: 'settings', tab: 'help' })}
+          onAiSettings={() => setOverlay({ type: 'settings', tab: 'ai' })}
           onSettings={async (next) => {
             if (next) await commitSettings(next)
             else await refreshSettings()
@@ -1765,6 +1766,8 @@ function Workspace({
     const staged = new Set(snap.status.staged.map((f) => f.path))
     setUnstagedSel((prev) => prev.filter((p) => unstaged.has(p)))
     setStagedSel((prev) => prev.filter((p) => staged.has(p)))
+    // A stashed, discarded, or committed file has nothing left to show.
+    setFile((prev) => (prev && !unstaged.has(prev) && !staged.has(prev) ? null : prev))
   }, [snap.status.unstaged, snap.status.staged, settings?.hideUntracked])
 
   useEffect(() => {
@@ -2118,6 +2121,7 @@ function Workspace({
       { label: 'Show in Windows Explorer', icon: <FolderOpen />, run: run(() => window.spoon.git.revealFile(path, entry.path)) },
       {},
       { label: staged ? (n > 1 ? `Unstage ${n} files` : 'Unstage') : n > 1 ? `Stage ${n} files` : 'Stage', icon: staged ? <Undo2 /> : <Plus />, run: run(() => doStage(paths, staged)) },
+      { label: n > 1 ? `Stash ${n} files…` : 'Stash this file…', icon: <IcoStash />, run: () => onOverlay({ type: 'stash', files: paths }) },
       { label: n > 1 ? `Discard ${n} files…` : 'Discard changes…', icon: <Trash2 />, danger: true, run: run(async () => { if (await window.spoon.app.confirm(n > 1 ? `Discard changes in ${n} files?` : `Discard changes in ${entry.path}?`)) { await window.spoon.git.discard(path, paths); onReload() } }) },
       {},
       { label: n > 1 ? 'Copy relative paths' : 'Copy relative path', icon: <Copy />, run: run(() => window.spoon.app.copy(paths.join('\n'))) },
@@ -2586,6 +2590,7 @@ function Workspace({
                 }}
                 diffs={file ? diffs.filter((d) => d.path === file || d.origPath === file) : diffs}
                 split={split}
+                staged={stagedFocus}
                 onHunk={(h, mode) => file && void window.spoon.git.applyHunk(path, file, h, mode).then(onReload)}
               />
               {analysis && (
@@ -2730,6 +2735,8 @@ function Workspace({
           </div>
         ) : sel.kind === 'stash' ? (
           <StashView
+            repo={path}
+            split={split}
             stash={snap.stashes.find((s) => s.selector === sel.selector)}
             onApply={(pop) => void catchErr(async () => { await window.spoon.git.stashApply(path, sel.selector, pop); onReload() })}
             onDrop={() =>
@@ -2944,14 +2951,33 @@ function FilePane({
 }
 
 function StashView({
+  repo,
+  split,
   stash,
   onApply,
   onDrop
 }: {
+  repo: string
+  split: boolean
   stash?: StashInfo
   onApply: (pop: boolean) => void
   onDrop: () => void
 }) {
+  const [diffs, setDiffs] = useState<FileDiff[] | null>(null)
+  const [err, setErr] = useState('')
+  const selector = stash?.selector
+  const hash = stash?.hash
+  useEffect(() => {
+    let current = true
+    setDiffs(null)
+    setErr('')
+    if (!selector) return
+    window.spoon.git
+      .diff(repo, { stash: selector })
+      .then((d) => { if (current) setDiffs(d as FileDiff[]) })
+      .catch((reason: unknown) => { if (current) setErr(reason instanceof Error ? reason.message : String(reason)) })
+    return () => { current = false }
+  }, [repo, selector, hash])
   if (!stash) return <div className="empty">That stash is no longer in the list.</div>
   return (
     <div className="stash-view">
@@ -2969,6 +2995,9 @@ function StashView({
         <Button className="ghost" onClick={onDrop}>
           Drop
         </Button>
+      </div>
+      <div className="stash-files">
+        {err ? <div className="empty">{err}</div> : !diffs ? <div className="empty loading">Loading stash...</div> : <DiffView repo={repo} rev={stash.selector} diffs={diffs} split={split} />}
       </div>
     </div>
   )
@@ -3052,6 +3081,7 @@ function DiffView({
   rev,
   diffs,
   split,
+  staged,
   onHunk,
   onLineContext
 }: {
@@ -3059,6 +3089,7 @@ function DiffView({
   rev?: string
   diffs: FileDiff[]
   split: boolean
+  staged?: boolean
   onLineContext?: LineContext
   onHunk?: (h: DiffHunk, mode: 'stage' | 'unstage' | 'discard') => void
 }) {
@@ -3068,21 +3099,24 @@ function DiffView({
       {diffs.map((d) => {
         const media = classifyMedia(d.path)
         const showText = !d.binary && d.hunks.length > 0
+        const hunkAction = d.untracked ? undefined : onHunk
         return (
         <div key={d.path} className="diff-file">
           <div className="diff-tools" onContextMenu={(e) => onLineContext?.(d, firstChangedLine(d), e)}>{d.path}</div>
           {media && repo ? (
-            <MediaCompare repo={repo} file={d.path} origPath={d.origPath} rev={rev} kind={media.kind} mime={media.mime} />
+            <MediaCompare repo={repo} file={d.path} origPath={d.origPath} rev={rev} staged={staged} kind={media.kind} mime={media.mime} />
           ) : d.binary ? (
             <div className="empty">Binary file. Spoon previews images, video, audio, and PDF.</div>
+          ) : !d.hunks.length ? (
+            <div className="empty">{d.untracked ? 'Empty new file.' : 'No text changes (mode or rename only).'}</div>
           ) : null}
           {media && showText ? (
             <details className="media-code">
               <summary>Text diff</summary>
-              {split ? <SplitHunks diff={d} onLineContext={onLineContext} /> : <UnifiedHunks diff={d} onHunk={onHunk} onLineContext={onLineContext} />}
+              {split ? <SplitHunks diff={d} onLineContext={onLineContext} /> : <UnifiedHunks diff={d} onHunk={hunkAction} onLineContext={onLineContext} />}
             </details>
           ) : !media && !d.binary ? (
-            split ? <SplitHunks diff={d} onLineContext={onLineContext} /> : <UnifiedHunks diff={d} onHunk={onHunk} onLineContext={onLineContext} />
+            split ? <SplitHunks diff={d} onLineContext={onLineContext} /> : <UnifiedHunks diff={d} onHunk={hunkAction} onLineContext={onLineContext} />
           ) : null}
         </div>
         )
@@ -3096,6 +3130,7 @@ function MediaCompare({
   file,
   origPath,
   rev,
+  staged,
   kind,
   mime
 }: {
@@ -3103,6 +3138,7 @@ function MediaCompare({
   file: string
   origPath?: string
   rev?: string
+  staged?: boolean
   kind: MediaKind
   mime: string
 }) {
@@ -3113,7 +3149,7 @@ function MediaCompare({
     setPair(null)
     setErr('')
     void window.spoon.git
-      .preview(repo, file, { rev, origPath })
+      .preview(repo, file, { rev, origPath, staged })
       .then((value) => {
         if (!cancel) setPair(value as MediaPair)
       })
@@ -3123,13 +3159,15 @@ function MediaCompare({
     return () => {
       cancel = true
     }
-  }, [repo, file, origPath, rev])
+  }, [repo, file, origPath, rev, staged])
   if (err) return <div className="empty">{err}</div>
   if (!pair) return <div className="empty loading">Loading preview...</div>
+  const stash = rev?.startsWith('stash@{')
+  const titles = stash ? ['Before stash', 'Stashed'] : rev ? ['Parent', 'This commit'] : staged ? ['HEAD', 'Staged'] : ['Before', 'Working copy']
   return (
     <div className={`media-preview${kind === 'image' ? ' images' : ''}`}>
-      <MediaPane repo={repo} file={origPath || file} title={rev ? 'Parent' : 'HEAD'} side={pair.before} fallback={{ kind, mime }} />
-      <MediaPane repo={repo} file={file} title={rev ? 'This commit' : 'Working copy'} side={pair.after} fallback={{ kind, mime }} />
+      <MediaPane repo={repo} file={origPath || file} title={titles[0]} side={pair.before} fallback={{ kind, mime }} />
+      <MediaPane repo={repo} file={file} title={titles[1]} side={pair.after} fallback={{ kind, mime }} />
     </div>
   )
 }
@@ -3440,6 +3478,7 @@ function DialogHost({
   onReload,
   onOpen,
   onHelp,
+  onAiSettings,
   onSettings
 }: {
   overlay: Overlay
@@ -3452,6 +3491,7 @@ function DialogHost({
   onReload: () => void
   onOpen: (p: string, n?: string) => void
   onHelp: () => void
+  onAiSettings: () => void
   onSettings: (next?: Settings) => Promise<void>
 }) {
   if (!overlay) return null
@@ -3488,7 +3528,8 @@ function DialogHost({
       />
     )
   if (overlay.type === 'tag' && path) return <FieldDialog title="Create Tag" label="Name" onClose={onClose} onOk={async (name) => { await window.spoon.git.createTag(path, name, name, snap?.commits[0]?.hash); onReload(); onClose() }} />
-  if (overlay.type === 'stash' && path) return <FieldDialog title="Stash" label="Message" optional onClose={onClose} onOk={async (name) => { await window.spoon.git.stash(path, name || undefined); onReload(); onClose() }} />
+  if (overlay.type === 'stash' && path)
+    return <StashDialog path={path} files={overlay.files} settings={settings} accounts={accounts} onClose={onClose} onReload={onReload} onAiSettings={onAiSettings} />
   if (overlay.type === 'remote' && path)
     return (
       <RemoteDialog
@@ -3595,6 +3636,105 @@ function Modal({
         <div className="dialog-body">{children}</div>
       </div>
     </div>
+  )
+}
+
+function StashDialog({
+  path,
+  files,
+  settings,
+  accounts,
+  onClose,
+  onReload,
+  onAiSettings
+}: {
+  path: string
+  files?: string[]
+  settings: Settings | null
+  accounts: AiAccount[]
+  onClose: () => void
+  onReload: () => void
+  onAiSettings: () => void
+}) {
+  const [message, setMessage] = useState('')
+  const [aiBusy, setAiBusy] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const provider = resolveAiProvider(settings, accounts)
+  const model = defaultModelFor(provider, settings)
+  const aiConnected = hasConnectedAi(accounts)
+  const count = files?.length ?? 0
+
+  async function writeWithAi(): Promise<string | null> {
+    if (!aiConnected) {
+      onAiSettings()
+      return null
+    }
+    setAiBusy(true)
+    setError('')
+    try {
+      const text = (await window.spoon.ai.stashMessage(path, provider, model, files)) as string
+      setMessage(text)
+      return text
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      return null
+    } finally {
+      setAiBusy(false)
+    }
+  }
+
+  async function save(text: string) {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await window.spoon.git.stash(path, text.trim() || undefined, files)
+      onReload()
+      onClose()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title={count ? `Stash ${count === 1 ? fileName(files![0]) : `${count} files`}` : 'Stash changes'} onClose={onClose}>
+      <label>Message</label>
+      <div className="row-btns stash-message">
+        <input
+          autoFocus
+          value={message}
+          placeholder={aiBusy ? 'Writing...' : 'Optional'}
+          disabled={aiBusy}
+          onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && void save(message)}
+        />
+        <Button className="ghost ico-text" disabled={aiBusy || busy} title={aiConnected ? 'Write the stash message from the changes' : 'Connect an AI provider'} onClick={() => void writeWithAi()}>
+          <IcoAi />
+          <span>{aiBusy ? 'Writing...' : aiConnected ? 'Write with AI' : 'Connect AI'}</span>
+        </Button>
+      </div>
+      <p className="hint">{count ? 'Only the selected files are stashed, including new ones.' : 'All changes are stashed, including new files.'}</p>
+      {error && <p className="hint danger-text">{error}</p>}
+      <div className="dialog-foot">
+        <Button className="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button
+          className="ghost ico-text"
+          disabled={aiBusy || busy || !aiConnected}
+          title="Write the message with AI and stash right away"
+          onClick={() => void writeWithAi().then((text) => { if (text != null) void save(text) })}
+        >
+          <IcoAi />
+          <span>AI stash</span>
+        </Button>
+        <Button className="primary" disabled={aiBusy || busy} onClick={() => void save(message)}>
+          {busy ? 'Stashing...' : 'Stash'}
+        </Button>
+      </div>
+    </Modal>
   )
 }
 

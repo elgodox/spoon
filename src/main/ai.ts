@@ -63,6 +63,28 @@ export async function generateCommitMessage(
   return complete(provider, user, SYSTEM, undefined, model)
 }
 
+const STASH_SYSTEM = `You name Git stashes for a desktop Git client.
+Rules:
+- Reply with one line only: a short description of the work in progress, max 60 characters.
+- Start with a lowercase verb or noun phrase, no trailing period.
+- Do not use quotes, markdown, prefixes like "WIP:" or "stash:", or mention you are an AI.`
+
+/** A short label for `git stash push -m`, from the working changes (optionally limited to some paths). */
+export async function generateStashMessage(
+  provider: AiProviderId,
+  cwd: string,
+  model?: string,
+  paths?: string[]
+): Promise<string> {
+  const all = await changeBrief(cwd)
+  const wanted = paths?.length ? new Set(paths.map((p) => p.replace(/\\/g, '/'))) : null
+  const files = wanted ? all.filter((file) => wanted.has(file.path)) : all
+  if (!files.length) throw new Error('No local changes to stash.')
+  const text = await complete(provider, `Name a stash holding these uncommitted changes.\n\n${briefListing(files, 12_000)}`, STASH_SYSTEM, 120, model)
+  const line = text.split('\n').map((l) => l.trim()).find(Boolean) ?? ''
+  return line.replace(/^["'`]+|["'`.]+$/g, '').slice(0, 72)
+}
+
 export async function analyzeRepository(
   provider: AiProviderId,
   cwd: string,

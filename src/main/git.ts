@@ -408,7 +408,7 @@ function operationIn(gitDir: string): RepoOverview['operation'] {
 
 export async function getStatus(cwd: string): Promise<RepoStatus> {
   const [porcelain, gitDir] = await Promise.all([
-    git(cwd, ['status', '--porcelain=v2', '-b', '--untracked-files=normal', '--ignore-submodules=untracked']),
+    git(cwd, ['status', '--porcelain=v2', '-b', '--untracked-files=all', '--ignore-submodules=untracked']),
     gitDirOf(cwd)
   ])
   const inMerge = existsSync(join(gitDir, 'MERGE_HEAD'))
@@ -887,10 +887,12 @@ export async function getDiff(
     staged?: boolean
     path?: string
     commit?: string
+    stash?: string
     ignoreWhitespace?: boolean
     context?: number
   } = {}
 ): Promise<FileDiff[]> {
+  if (opts.stash) return stashDiff(cwd, opts.stash, opts)
   const args = ['diff', `--unified=${opts.context ?? 3}`, '--find-renames']
   if (opts.ignoreWhitespace) args.push('-w')
   if (opts.staged) args.push('--cached')
@@ -901,7 +903,58 @@ export async function getDiff(
   }
   if (opts.path) args.push('--', opts.path)
   const r = await git(cwd, args, { allowFail: true })
-  return parseDiffs(r.stdout)
+  const diffs = parseDiffs(r.stdout)
+  // `git diff` never lists untracked files, so new files would have no preview.
+  if (!opts.staged && !opts.commit) diffs.push(...(await untrackedDiffs(cwd, opts.path)))
+  return diffs
+}
+
+const MAX_UNTRACKED_DIFFS = 200
+const MAX_UNTRACKED_TEXT = 1024 * 1024
+
+async function untrackedDiffs(cwd: string, path?: string): Promise<FileDiff[]> {
+  const args = ['ls-files', '--others', '--exclude-standard']
+  if (path) args.push('--', path)
+  const r = await git(cwd, args, { allowFail: true })
+  const files = r.stdout.split('\n').filter(Boolean).slice(0, MAX_UNTRACKED_DIFFS)
+  return files.map((file) => newFileDiff(cwd, file))
+}
+
+function newFileDiff(cwd: string, file: string): FileDiff {
+  const base = { path: file, status: 'A', image: isImage(file), untracked: true }
+  let buf: Buffer
+  try {
+    const abs = worktreeFile(cwd, file)
+    const info = statSync(abs)
+    if (!info.isFile() || info.size > MAX_UNTRACKED_TEXT) return { ...base, binary: true, hunks: [], patch: '' }
+    buf = readFileSync(abs)
+  } catch {
+    return { ...base, binary: true, hunks: [], patch: '' }
+  }
+  if (buf.subarray(0, 8000).includes(0)) return { ...base, binary: true, hunks: [], patch: '' }
+  const text = buf.toString('utf8')
+  const lines = text ? text.split('\n') : []
+  if (text.endsWith('\n')) lines.pop()
+  const header = `@@ -0,0 +1,${lines.length} @@`
+  const hunk: DiffHunk = {
+    header,
+    oldStart: 0,
+    oldCount: 0,
+    newStart: 1,
+    newCount: lines.length,
+    lines: [{ type: 'hunk', text: header }, ...lines.map((line, i) => ({ type: 'add' as const, text: line.replace(/\r$/, ''), newNo: i + 1 }))]
+  }
+  const patch = `diff --git a/${file} b/${file}\nnew file mode 100644\n--- /dev/null\n+++ b/${file}\n${header}\n${lines.map((l) => `+${l}`).join('\n')}\n`
+  return { ...base, binary: false, hunks: lines.length ? [hunk] : [], patch }
+}
+
+async function stashDiff(cwd: string, selector: string, opts: { ignoreWhitespace?: boolean; context?: number }): Promise<FileDiff[]> {
+  const args = ['stash', 'show', '-p', `--unified=${opts.context ?? 3}`, '--find-renames']
+  if (opts.ignoreWhitespace) args.push('-w')
+  // --include-untracked needs Git 2.32+; older Git still shows the tracked part.
+  const withUntracked = await git(cwd, [...args, '--include-untracked', selector], { allowFail: true })
+  if (withUntracked.code === 0) return parseDiffs(withUntracked.stdout)
+  return parseDiffs((await git(cwd, [...args, selector], { allowFail: true })).stdout)
 }
 
 export function parseDiffs(patch: string): FileDiff[] {
@@ -909,9 +962,7 @@ export function parseDiffs(patch: string): FileDiff[] {
   const chunks = patch.split(/^diff --git /m).filter((c) => c.trim())
   for (const chunk of chunks) {
     const text = 'diff --git ' + chunk
-    const pathMatch = text.match(/^diff --git a\/(.+?) b\/(.+)$/m)
-    const origPath = pathMatch?.[1]
-    const path = pathMatch?.[2] ?? origPath ?? ''
+    const { origPath, path } = diffPaths(text)
     const binary = /Binary files /.test(text)
     const status = /^new file/m.test(text) ? 'A' : /^deleted file/m.test(text) ? 'D' : origPath !== path ? 'R' : 'M'
     const hunks = parseHunks(text)
@@ -926,6 +977,29 @@ export function parseDiffs(patch: string): FileDiff[] {
     })
   }
   return files
+}
+
+/** Paths from a diff header. A lazy regex breaks on names like "a b/c", so prefer the explicit lines. */
+function diffPaths(text: string): { origPath?: string; path: string } {
+  const renameFrom = text.match(/^rename from (.+)$/m)?.[1]
+  const renameTo = text.match(/^rename to (.+)$/m)?.[1]
+  if (renameFrom && renameTo) return { origPath: renameFrom, path: renameTo }
+  const header = text.match(/^diff --git (.+)$/m)?.[1] ?? ''
+  // Unchanged names make the header symmetric: "a/<p> b/<p>".
+  if (header.length % 2 === 1) {
+    const half = (header.length - 1) / 2
+    const left = header.slice(0, half)
+    const right = header.slice(half + 1)
+    if (left.startsWith('a/') && right.startsWith('b/') && left.slice(2) === right.slice(2)) {
+      return { origPath: left.slice(2), path: right.slice(2) }
+    }
+  }
+  // Git appends a tab to these lines when the name contains a space.
+  const minus = text.match(/^--- a\/(.+)$/m)?.[1]?.replace(/\t$/, '')
+  const plus = text.match(/^\+\+\+ b\/(.+)$/m)?.[1]?.replace(/\t$/, '')
+  if (minus || plus) return { origPath: minus ?? plus, path: plus ?? minus ?? '' }
+  const m = header.match(/^a\/(.+?) b\/(.+)$/)
+  return { origPath: m?.[1], path: m?.[2] ?? m?.[1] ?? '' }
 }
 
 export function parseHunks(patch: string): DiffHunk[] {
@@ -950,7 +1024,8 @@ export function parseHunks(patch: string): DiffHunk[] {
       hunks.push(current)
       continue
     }
-    if (!current) continue
+    // Real context lines start with a space; a bare empty string is the patch's trailing newline.
+    if (!current || line === '') continue
     if (line.startsWith('+')) {
       current.lines.push({ type: 'add', text: line.slice(1), newNo: newNo++ })
     } else if (line.startsWith('-')) {
@@ -1073,20 +1148,23 @@ export function worktreeFile(cwd: string, file: string): string {
 export async function previewMedia(
   cwd: string,
   file: string,
-  opts: { rev?: string; origPath?: string } = {}
+  opts: { rev?: string; origPath?: string; staged?: boolean } = {}
 ): Promise<MediaPair> {
   const beforePath = opts.origPath || file
+  const blob = (spec: string) => gitBinary(cwd, ['cat-file', 'blob', spec])
   if (opts.rev) {
-    const [before, after] = await Promise.all([
-      gitBinary(cwd, ['cat-file', 'blob', `${opts.rev}^:${beforePath}`]),
-      gitBinary(cwd, ['cat-file', 'blob', `${opts.rev}:${file}`])
-    ])
+    const [before, after] = await Promise.all([blob(`${opts.rev}^:${beforePath}`), blob(`${opts.rev}:${file}`)])
+    // A stash keeps its untracked files in a third parent.
+    const stashed = !after && opts.rev.startsWith('stash@{') ? await blob(`${opts.rev}^3:${file}`) : null
+    return { before: toMediaSide(beforePath, before), after: toMediaSide(file, after ?? stashed) }
+  }
+  if (opts.staged) {
+    const [before, after] = await Promise.all([blob(`HEAD:${beforePath}`), blob(`:${file}`)])
     return { before: toMediaSide(beforePath, before), after: toMediaSide(file, after) }
   }
-  return {
-    before: toMediaSide(beforePath, await gitBinary(cwd, ['cat-file', 'blob', `HEAD:${beforePath}`])),
-    after: toMediaSide(file, readWorktreeMedia(cwd, file))
-  }
+  // Unstaged changes are measured against the index, which falls back to HEAD for files not staged.
+  const before = (await blob(`:${beforePath}`)) ?? (await blob(`HEAD:${beforePath}`))
+  return { before: toMediaSide(beforePath, before), after: toMediaSide(file, readWorktreeMedia(cwd, file)) }
 }
 
 function readWorktreeMedia(cwd: string, file: string): { buf: Buffer; tooLarge: boolean; bytes: number } | null {
@@ -1338,7 +1416,7 @@ export async function overview(path: string): Promise<RepoOverview> {
     checkedAt: Date.now()
   }
   if (!base.exists) return { ...base, error: 'Folder not found' }
-  const st = await git(path, ['status', '--porcelain=v2', '-b', '--untracked-files=normal', '--ignore-submodules=untracked'], {
+  const st = await git(path, ['status', '--porcelain=v2', '-b', '--untracked-files=all', '--ignore-submodules=untracked'], {
     allowFail: true
   })
   if (st.code !== 0) {

@@ -33,7 +33,7 @@ import * as records from './repo-cache'
 import * as store from './store'
 import * as oauth from './oauth'
 import * as updater from './updater'
-import { analyzeRepository, analyzeWorkspaces, generateCommitMessage } from './ai'
+import { analyzeRepository, analyzeWorkspaces, generateCommitMessage, generateStashMessage } from './ai'
 import * as launchers from './launchers'
 import * as profile from './profile'
 import { mapIndexLine } from '../shared/change-location'
@@ -786,7 +786,7 @@ function registerIpc(): void {
     const buf = await git.showFile(path, rev, file)
     return buf.toString('utf8')
   })
-  ipcMain.handle('git:preview', (_e, path: string, file: string, opts?: { rev?: string; origPath?: string }) =>
+  ipcMain.handle('git:preview', (_e, path: string, file: string, opts?: { rev?: string; origPath?: string; staged?: boolean }) =>
     git.previewMedia(path, file, opts)
   )
   ipcMain.handle('git:openFile', async (_e, path: string, file: string) => {
@@ -864,6 +864,9 @@ function registerIpc(): void {
   ipcMain.handle('ai:grokPoll', (_e, flow) => oauth.pollGrokDevice(flow))
   ipcMain.handle('ai:generate', async (_e, provider: AiProviderId, diff: string, extra?: string, model?: string) =>
     generateCommitMessage(provider, diff, extra, model)
+  )
+  ipcMain.handle('ai:stashMessage', (_e, repo: string, provider: AiProviderId, model?: string, files?: string[]) =>
+    generateStashMessage(provider, repo, model, files)
   )
   ipcMain.handle('ai:analyze', (_e, repo: string, provider: AiProviderId, model?: string, scope?: string) =>
     analyzeRepository(provider, repo, model, scope === 'staged' ? 'staged' : 'all')

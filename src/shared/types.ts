@@ -192,6 +192,8 @@ export interface FileDiff {
   binary: boolean
   image: boolean
   hunks: DiffHunk[]
+  /** A new file Git does not track yet; its hunks cannot be staged one by one. */
+  untracked?: boolean
   oldContent?: string
   newContent?: string
   patch: string

@@ -57,7 +57,7 @@ const api = {
     history: (path: string, file: string) => ipcRenderer.invoke('git:history', path, file),
     tree: (path: string, rev?: string) => ipcRenderer.invoke('git:tree', path, rev),
     showFile: (path: string, rev: string, file: string) => ipcRenderer.invoke('git:showFile', path, rev, file),
-    preview: (path: string, file: string, opts?: { rev?: string; origPath?: string }) =>
+    preview: (path: string, file: string, opts?: { rev?: string; origPath?: string; staged?: boolean }) =>
       ipcRenderer.invoke('git:preview', path, file, opts),
     openFile: (path: string, file: string) => ipcRenderer.invoke('git:openFile', path, file),
     openFileAt: (path: string, file: string, line?: number, launcherId?: string, staged?: boolean) => ipcRenderer.invoke('git:openFileAt', path, file, line, launcherId, staged),
@@ -98,6 +98,8 @@ const api = {
     grokPoll: (flow: object) => ipcRenderer.invoke('ai:grokPoll', flow),
     generate: (provider: string, diff: string, extra?: string, model?: string) =>
       ipcRenderer.invoke('ai:generate', provider, diff, extra, model),
+    stashMessage: (repo: string, provider: string, model?: string, files?: string[]) =>
+      ipcRenderer.invoke('ai:stashMessage', repo, provider, model, files),
     analyze: (repo: string, provider: string, model?: string, scope?: 'all' | 'staged') =>
       ipcRenderer.invoke('ai:analyze', repo, provider, model, scope),
     analyzeWorkspaces: (provider: string, model?: string) =>
