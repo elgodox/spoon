@@ -15,12 +15,6 @@
     --button-primary-text: #101624;
     --button-danger-text: #ff939f;
   }
-  html[data-pack='spoon'] {
-    --button-toolbar-height: 58px;
-    --button-primary-fill: var(--accent-solid);
-    --button-primary-image: linear-gradient(135deg, var(--accent-solid), var(--accent-end));
-    --button-primary-text: #fff;
-  }
   html[data-pack='spacex'] {
     --button-primary-fill: #f5f5f5;
     --button-primary-text: #101014;
@@ -112,8 +106,6 @@
     color: var(--text);
   }
   .spoon-button[data-button-variant='icon'] :is(.ico, .icon-svg) { width: 14px; height: 14px; }
-  .spoon-button.about-close { color: #fff; background: #ffffff24; }
-  .spoon-button.about-close:hover:not(:disabled) { color: #fff; background: #ffffff40; border-color: #ffffff40; }
 
   .spoon-button[data-button-variant='toolbar'] {
     display: inline-flex;
@@ -206,14 +198,6 @@
     max-width: 28px;
     max-height: 28px;
     border-radius: 8px;
-  }
-  html[data-pack='spoon'] .spoon-button.tab-add {
-    width: 30px;
-    height: 30px;
-    min-width: 30px;
-    min-height: 30px;
-    max-width: 30px;
-    max-height: 30px;
   }
 
   .spoon-button[data-button-variant='card'] {

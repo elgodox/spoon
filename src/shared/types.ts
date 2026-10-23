@@ -1,5 +1,5 @@
 export type ThemeMode = 'light' | 'dark'
-export type ThemePack = 'spoon' | 'classic' | 'colored' | 'spacex'
+export type ThemePack = 'classic' | 'colored' | 'spacex'
 export type IconStyle = 'mono' | 'color'
 export type AccentId = 'blue' | 'violet' | 'red' | 'teal' | 'amber' | 'silver' | 'custom'
 
@@ -133,6 +133,8 @@ export interface CommitInfo {
   mergeLanes: number[]
   lanesIn: number[]
   lanesOut: number[]
+  /** Branch tip: no child above it, so its lane starts at this commit. */
+  tip?: boolean
 }
 
 export interface StatusEntry {

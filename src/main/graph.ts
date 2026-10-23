@@ -6,6 +6,7 @@ export function layoutGraph(commits: CommitInfo[]): CommitInfo[] {
 
   for (const commit of commits) {
     let lane = assigned.get(commit.hash)
+    commit.tip = lane === undefined
     if (lane === undefined) {
       lane = firstEmpty(lanes)
       if (lane === -1) {

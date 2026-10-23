@@ -25,6 +25,7 @@ async function main() {
     const page = await app.firstWindow(), errors = []
     page.on('pageerror', (error) => errors.push(error.message))
     await page.route('https://**gravatar.com/**', (route) => route.abort())
+    await page.locator('.workspace-row', { hasText: 'Test workspace' }).first().hover()
     await page.getByRole('button', { name: 'Edit Test workspace', exact: true }).click()
     await page.getByLabel('Workspace name').fill('Edited workspace')
     await page.locator('.workspace-repo-options label').filter({ hasText: 'beta' }).locator('input').uncheck()

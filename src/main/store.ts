@@ -98,6 +98,8 @@ function load(): StoreFile {
     // One-time reset for this release: everyone moves to Classic with color icons.
     // From appearanceVersion 3 on, the user's own appearance choice is kept.
     const refreshAppearance = (parsed.settings?.appearanceVersion ?? 0) < 3
+    // The violet Spoon pack was retired: its users move to Classic with the default blue accent.
+    const retiredPack = (parsed.settings?.themePack as string | undefined) === 'spoon'
     cache = {
       settings: {
         ...defaults,
@@ -108,7 +110,7 @@ function load(): StoreFile {
         themePack: refreshAppearance ? 'classic' : sanitizeThemePack(parsed.settings?.themePack),
         appearanceVersion: 3,
         iconStyle: refreshAppearance ? 'color' : sanitizeIconStyle(parsed.settings?.iconStyle),
-        accentId: refreshAppearance ? 'blue' : sanitizeAccentId(parsed.settings?.accentId),
+        accentId: refreshAppearance || retiredPack ? 'blue' : sanitizeAccentId(parsed.settings?.accentId),
         accentCustom: sanitizeAccentCustom((parsed.settings as Partial<Settings> | undefined)?.accentCustom),
         aiProvider: fallbackAiProvider((parsed.settings as Partial<Settings> | undefined)?.aiProvider),
         aiModels: sanitizeAiModels({ ...defaults.aiModels, ...(parsed.settings?.aiModels ?? {}) }),

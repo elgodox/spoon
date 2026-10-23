@@ -153,14 +153,16 @@ test('models: provider fallback, labels, defaults and resolution', () => {
 })
 
 test('themes: accents, icon maps and sanitizers', () => {
-  assert.equal(THEME_PACKS.length, 4)
+  assert.deepEqual(THEME_PACKS.map((p) => p.id), ['classic', 'colored', 'spacex'])
   assert.deepEqual(resolveAccent('custom', 'dark', '#123456'), { accent: '#123456', accent2: '#123456' })
   assert.notEqual(resolveAccent('custom', 'dark', 'bad').accent, 'bad')
   assert.notEqual(resolveAccent('blue', 'dark').accent, resolveAccent('blue', 'light').accent)
   assert.equal(iconColorMap('classic', 'mono'), null)
-  assert.equal(iconColorMap('spoon', 'color')?.brand, '#ffffff')
+  assert.equal(iconColorMap('classic', 'color')?.brand, undefined)
+  assert.notEqual(iconColorMap('classic', 'color', 'light')?.home, iconColorMap('classic', 'color', 'dark')?.home)
   assert.ok(iconColorMap('spacex', 'color'))
   assert.equal(sanitizeThemePack('colored'), 'colored')
+  assert.equal(sanitizeThemePack('spoon'), 'classic')
   assert.equal(sanitizeIconStyle('color'), 'color')
   assert.equal(sanitizeIconStyle(3), 'mono')
   assert.equal(sanitizeAccentId('teal'), 'teal')

@@ -47,30 +47,24 @@ function incomingNotes(raw?: string): string[] {
     .slice(0, 6)
 }
 
-function SpoonBanner() {
-  const raw = useId().replace(/:/g, '')
-  const bg = `${raw}-bg`
-  const metal = `${raw}-metal`
+/** The app icon itself (resources/spoon.svg): the spoon is a commit graph. */
+function SpoonLogo() {
+  const bg = `${useId().replace(/:/g, '')}-bg`
   return (
-    <svg className="about-hero-art" viewBox="0 0 720 220" aria-hidden="true">
+    <svg className="about-logo-art" viewBox="0 0 1024 1024" aria-hidden="true">
       <defs>
-        <linearGradient id={bg} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="#8B5CF6" />
-          <stop offset="1" stopColor="#5B21B6" />
-        </linearGradient>
-        <linearGradient id={metal} x1="0.15" y1="0" x2="0.9" y2="1">
-          <stop offset="0" stopColor="#FFFFFF" />
-          <stop offset="1" stopColor="#EDE9FE" />
+        <linearGradient id={bg} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#3B82F6" />
+          <stop offset="1" stopColor="#1D4ED8" />
         </linearGradient>
       </defs>
-      <rect width="720" height="220" fill={`url(#${bg})`} />
-      <circle cx="86" cy="-18" r="120" fill="#fff" opacity="0.07" />
-      <circle cx="660" cy="230" r="130" fill="#2e1064" opacity="0.22" />
-      <g transform="translate(360 118) rotate(-38) scale(0.3) translate(-512 -400)">
-        <rect x="492" y="448" width="40" height="400" rx="20" fill={`url(#${metal})`} />
-        <ellipse cx="512" cy="292" rx="176" ry="218" fill={`url(#${metal})`} />
-        <path fill="#FFFFFF" d="M400 250 C445 165 560 155 612 228 C540 200 460 218 400 250 Z" />
-        <path fill="#6D28D9" opacity="0.14" d="M430 360 C470 430 560 430 600 355 C575 400 500 412 430 360 Z" />
+      <rect width="1024" height="1024" rx="232" fill={`url(#${bg})`} />
+      <g transform="translate(512 512) scale(1.08) translate(-522 -496) rotate(-45 512 512)" fill="none" strokeLinecap="round">
+        <path d="M512 560 C512 660 660 640 660 712" stroke="#7DD3FC" strokeWidth="44" />
+        <circle cx="660" cy="760" r="40.5" stroke="#7DD3FC" strokeWidth="31" />
+        <ellipse cx="512" cy="288" rx="138" ry="176" fill="#FFFFFF" />
+        <path d="M512 440 V770" stroke="#FFFFFF" strokeWidth="52" />
+        <circle cx="512" cy="826" r="47" stroke="#FFFFFF" strokeWidth="34" />
       </g>
     </svg>
   )
@@ -160,12 +154,12 @@ export function AboutDialog({ onClose, onHelp }: { onClose: () => void; onHelp: 
         tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="about-hero">
-          <SpoonBanner />
-          <Button type="button" className="about-close" aria-label="Close" onClick={onClose}>
-            <IcoClose />
-          </Button>
-        </div>
+        <Button type="button" className="about-close" aria-label="Close" onClick={onClose}>
+          <IcoClose />
+        </Button>
+        <aside className="about-logo">
+          <SpoonLogo />
+        </aside>
         <div className="about-body">
           <header className="about-brand">
             <p className="about-kicker">Git client for Windows</p>

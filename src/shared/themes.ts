@@ -20,15 +20,6 @@ export type ThemePackDef = {
 
 export const THEME_PACKS: ThemePackDef[] = [
   {
-    id: 'spoon',
-    label: 'Spoon',
-    blurb: 'Deep indigo, electric violet, luminous icons. A little more flow.',
-    preview: ['#110c24', '#a855f7', '#67a8ff'],
-    preferDark: true,
-    preferIcons: 'color',
-    preferAccent: 'violet'
-  },
-  {
     id: 'classic',
     label: 'Classic',
     blurb: 'Clean Spoon chrome. Mono icons, familiar blue.',
@@ -65,11 +56,10 @@ export const ACCENTS: AccentDef[] = [
   { id: 'custom', label: 'Custom', light: '#0b57d0', dark: '#6cb6ff', swatch: '#ffffff' }
 ]
 
-/** Per-action icon colors when iconStyle is `color`. */
+/** Per-action icon colors when iconStyle is `color` (dark themes). The brand mark follows the accent. */
 export const ICON_COLORS: Record<string, string> = {
-  brand: '#c4b5fd',
   launch: '#38bdf8',
-  workspaces: '#a78bfa',
+  workspaces: '#2dd4bf',
   fetch: '#60a5fa',
   pull: '#34d399',
   push: '#fbbf24',
@@ -77,13 +67,33 @@ export const ICON_COLORS: Record<string, string> = {
   stash: '#fb923c',
   branch: '#22d3ee',
   terminal: '#a3e635',
-  health: '#f472b6',
-  activity: '#818cf8',
-  home: '#e2e8f0',
+  health: '#fb7185',
+  activity: '#60a5fa',
+  home: '#cbd5e1',
   settings: '#94a3b8',
-  ai: '#c084fc',
+  ai: '#fde68a',
   commit: '#4ade80',
   analyze: '#38bdf8'
+}
+
+/** Same hues, deep enough to read on light backgrounds. */
+export const ICON_COLORS_LIGHT: Record<string, string> = {
+  launch: '#0284c7',
+  workspaces: '#0d9488',
+  fetch: '#2563eb',
+  pull: '#059669',
+  push: '#d97706',
+  refresh: '#64748b',
+  stash: '#ea580c',
+  branch: '#0891b2',
+  terminal: '#65a30d',
+  health: '#e11d48',
+  activity: '#2563eb',
+  home: '#475569',
+  settings: '#64748b',
+  ai: '#fde68a',
+  commit: '#16a34a',
+  analyze: '#0284c7'
 }
 
 export const SPACEX_ICON_COLORS: Record<string, string> = {
@@ -119,14 +129,15 @@ export function resolveAccent(
   return { accent, accent2: accent }
 }
 
-export function iconColorMap(pack: ThemePack, style: IconStyle): Record<string, string> | null {
+export function iconColorMap(pack: ThemePack, style: IconStyle, mode: ThemeMode = 'dark'): Record<string, string> | null {
   if (style !== 'color') return null
-  if (pack === 'spoon') return { ...ICON_COLORS, brand: '#ffffff', push: '#c4a0ff', branch: '#b18aff', pull: '#83b5ff', terminal: '#9aafff', home: '#c4b5fd' }
-  return pack === 'spacex' ? SPACEX_ICON_COLORS : ICON_COLORS
+  if (pack === 'spacex') return SPACEX_ICON_COLORS
+  return mode === 'light' ? ICON_COLORS_LIGHT : ICON_COLORS
 }
 
+/** Unknown or retired packs (the violet `spoon` pack) fall back to Classic. */
 export function sanitizeThemePack(value: unknown): ThemePack {
-  return value === 'spoon' || value === 'colored' || value === 'spacex' || value === 'classic' ? value : 'classic'
+  return value === 'colored' || value === 'spacex' || value === 'classic' ? value : 'classic'
 }
 
 export function sanitizeIconStyle(value: unknown): IconStyle {

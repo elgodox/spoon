@@ -26,7 +26,7 @@ async function main() {
     const working = ['insert one', 'insert two', ...staged]; working[16] = 'working change'
     await fs.writeFile(path.join(repo, name), working.join('\n') + '\n'); await fs.unlink(path.join(repo, 'removed.ts'))
     const photo = `data:image/png;base64,${(await sharp({ create: { width: 256, height: 256, channels: 4, background: '#ab68ff' } }).png().toBuffer()).toString('base64')}`
-    await fs.writeFile(path.join(data, 'spoon.json'), JSON.stringify({ settings: { appearanceVersion: 3, theme: 'dark', themePack: 'spoon', iconStyle: 'color', accentId: 'violet', onboarded: true, autoUpdate: false, autoFetch: false, avatarOverrides: { 'committer@example.com': photo }, profileEmail: 'committer@example.com' }, recent: [{ path: repo, name: 'File actions', opened: Date.now() }], session: { tabs: [{ id: 'test', path: repo, name: 'File actions' }], activeId: 'test' }, creds: {} }))
+    await fs.writeFile(path.join(data, 'spoon.json'), JSON.stringify({ settings: { appearanceVersion: 3, theme: 'dark', themePack: 'classic', iconStyle: 'color', accentId: 'blue', onboarded: true, autoUpdate: false, autoFetch: false, avatarOverrides: { 'committer@example.com': photo }, profileEmail: 'committer@example.com' }, recent: [{ path: repo, name: 'File actions', opened: Date.now() }], session: { tabs: [{ id: 'test', path: repo, name: 'File actions' }], activeId: 'test' }, creds: {} }))
     // An actual executable records editor arguments, including a path with ampersands.
     const fakeEditor = path.join(bin, 'FakeEditor.exe'), argsFile = path.join(temp, 'editor.txt')
     const source = 'using System; using System.IO; public class FakeEditor { public static void Main(string[] args) { File.WriteAllLines(Environment.GetEnvironmentVariable("SPOON_EDITOR_OUTPUT"), args); } }'
@@ -49,21 +49,22 @@ async function main() {
     async function auditButtons(screen) {
       // Inspect settled styles; hidden windows can pause compositor transitions.
       const still = await page.addStyleTag({ content: 'button{transition:none!important}' })
-      const results = await page.locator('button').evaluateAll((buttons) => buttons.filter((button) => button.getClientRects().length && getComputedStyle(button).visibility !== 'hidden').map((button) => {
+      const results = await page.locator('button').evaluateAll((buttons) => buttons.filter((button) => button.getClientRects().length && getComputedStyle(button).visibility !== 'hidden' && !button.classList.contains('contrib-day')).map((button) => {
         const style = getComputedStyle(button)
-        return { label: (button.getAttribute('aria-label') || button.textContent || button.title).trim().slice(0, 80), variant: button.dataset.buttonVariant, className: button.className, height: style.height, minHeight: style.minHeight, radius: style.borderRadius, fontSize: style.fontSize, weight: style.fontWeight, padding: style.padding, opacity: style.opacity, disabled: button.disabled, border: style.borderWidth, background: style.backgroundColor }
+        return { label: (button.getAttribute('aria-label') || button.textContent || button.title).trim().slice(0, 80), variant: button.dataset.buttonVariant, compact: !!button.closest('.home-seg, .stat-pill, .recent-go'), className: button.className, height: style.height, minHeight: style.minHeight, radius: style.borderRadius, fontSize: style.fontSize, weight: style.fontWeight, padding: style.padding, opacity: style.opacity, disabled: button.disabled, border: style.borderWidth, background: style.backgroundColor }
       }))
       await still.evaluate((element) => element.remove())
       assert.ok(results.length, `No buttons on ${screen}`)
       for (const button of results) {
         assert.ok(button.variant && button.className.includes('spoon-button'), `Unclassified button on ${screen}: ${button.label}`)
         assert.equal(button.fontSize, '12px', `${screen}: font of ${button.label}`)
-        assert.equal(button.radius, button.variant === 'card' ? '12px' : '8px', `${screen}: radius of ${button.label}`)
-        if (['primary','secondary','danger','select','filter','tab','segment'].includes(button.variant)) {
+        // The Home dashboard's stat tiles, segmented controls and recent-card buttons keep their own compact geometry.
+        if (!button.compact) assert.equal(button.radius, button.variant === 'card' ? '12px' : '8px', `${screen}: radius of ${button.label}`)
+        if (!button.compact && ['primary','secondary','danger','select','filter','tab','segment'].includes(button.variant)) {
           assert.equal(button.height, '32px', `${screen}: height of ${button.label}`)
           assert.equal(button.minHeight, '32px', `${screen}: minimum of ${button.label}`)
         }
-        if (button.disabled) assert.equal(button.opacity, '0.48', `${screen}: disabled ${button.label}`)
+        if (button.disabled && !button.compact) assert.equal(button.opacity, '0.48', `${screen}: disabled ${button.label}`)
       }
       buttonAudit.push({ screen, buttons: results })
       await fs.writeFile(path.join(buttonOutput, 'audit.json'), JSON.stringify(buttonAudit, null, 2))
@@ -138,7 +139,7 @@ async function main() {
     assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= 980 && bounds.y + bounds.height <= 620)
     await auditButtons('classic-light-context-menu')
     await page.keyboard.press('Escape')
-    for (const [pack, theme] of [['classic','dark'],['classic','light'],['spoon','dark'],['spoon','light'],['colored','dark'],['colored','light'],['spacex','dark']]) {
+    for (const [pack, theme] of [['classic','dark'],['classic','light'],['colored','dark'],['colored','light'],['spacex','dark']]) {
       await page.getByRole('button', { name: 'Settings', exact: true }).click()
       await page.locator('.prefs-layout > .rail').getByRole('button', { name: 'Appearance', exact: true }).click()
       await page.locator(`.theme-pack-card.pack-${pack}`).click()
@@ -178,7 +179,7 @@ async function main() {
       assert.equal(await stage.evaluate((button) => getComputedStyle(button).transform), 'none')
       await page.mouse.move(10, 10); await page.mouse.up(); await page.emulateMedia({ reducedMotion: 'no-preference' })
       if (pack === 'classic' && theme === 'dark') await capture('buttons-classic-dark-changes')
-      if (pack === 'spoon' && theme === 'dark') await capture('buttons-spoon-dark-changes')
+      if (pack === 'colored' && theme === 'dark') await capture('buttons-colored-dark-changes')
     }
     await page.locator('.sidebar').getByRole('button', { name: 'History', exact: true }).click()
     await page.locator('.commit-row').first().click(); await auditButtons('history-details')

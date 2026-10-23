@@ -70,6 +70,7 @@ import {
   IcoHome,
   IcoLaunch,
   IcoOpen,
+  IcoFolder,
   IcoPull,
   IcoPush,
   IcoRefresh,
@@ -276,7 +277,7 @@ export function App() {
     const { accent, accent2 } = resolveAccent(accentId, mode, s.accentCustom)
     root.style.setProperty('--accent', accent)
     root.style.setProperty('--accent-2', accent2)
-    const iconMap = iconColorMap(pack, icons)
+    const iconMap = iconColorMap(pack, icons, mode)
     for (const key of ICO_VAR_KEYS) {
       if (iconMap?.[key]) root.style.setProperty(`--ico-${key}`, iconMap[key])
       else root.style.removeProperty(`--ico-${key}`)
@@ -1371,7 +1372,7 @@ function ConfettiBurst({ token }: { token: number }) {
     }
     resize()
 
-    const colors = ['#7c3aed', '#c4b5fd', '#ffffff', '#f59e0b', '#6cb6ff', '#f472b6', '#34d399', '#fb7185', '#a78bfa', '#22d3ee']
+    const colors = ['#3b82f6', '#93c5fd', '#ffffff', '#f59e0b', '#6cb6ff', '#2dd4bf', '#34d399', '#fb7185', '#fde68a', '#22d3ee']
     type Bit = {
       x: number
       y: number
@@ -2202,8 +2203,8 @@ function Workspace({
     return (
       <div
         key={b.fullName}
-        className={`side-item branch-row ${b.current ? 'is-current' : ''} ${deep ? 'deep' : ''} ${(sel.kind === 'branch' && sel.name === b.name) || focusBranch === b.name ? 'active' : ''}`}
-        style={{ ['--lane-color' as string]: laneColor(branchLanes.get(b.hash) ?? 0) }}
+        className={`side-item tree-row branch-row ${b.current ? 'is-current' : ''} ${deep ? 'deep' : ''} ${(sel.kind === 'branch' && sel.name === b.name) || focusBranch === b.name ? 'active' : ''}`}
+        style={{ ['--lane-color' as string]: laneColor(branchLanes.get(b.hash) ?? 0), ['--depth' as string]: deep ? 1 : 0 }}
         title={`${b.name}${b.upstream ? ` · tracks ${b.upstream}` : ''} · Double-click to checkout`}
         role="button" tabIndex={0}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); clickLocalBranch(b) } }}
@@ -2214,6 +2215,7 @@ function Workspace({
           branchCtx(b)
         }}
       >
+        <span className="twisty" aria-hidden />
         <IcoBranch />
         <span className="label">{deep ? branchLeafName(b.name) : b.name}</span>
         {b.current && <span className="head-badge">HEAD</span>}
@@ -2233,8 +2235,8 @@ function Workspace({
     return (
       <div
         key={b.fullName}
-        className={`side-item branch-row indent ${deep ? 'deep' : ''} ${(sel.kind === 'remote' && sel.name === b.name) || focusBranch === b.name ? 'active' : ''}`}
-        style={{ ['--lane-color' as string]: laneColor(branchLanes.get(b.hash) ?? 1) }}
+        className={`side-item tree-row branch-row indent ${deep ? 'deep' : ''} ${(sel.kind === 'remote' && sel.name === b.name) || focusBranch === b.name ? 'active' : ''}`}
+        style={{ ['--lane-color' as string]: laneColor(branchLanes.get(b.hash) ?? 1), ['--depth' as string]: deep ? 2 : 1 }}
         title={`${b.name} · Double-click to checkout`}
         role="button" tabIndex={0}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); clickRemoteBranch(b) } }}
@@ -2245,6 +2247,7 @@ function Workspace({
           remoteCtx(remote)
         }}
       >
+        <span className="twisty" aria-hidden />
         <IcoBranch />
         <span className="label">{leaf}</span>
       </div>
@@ -2340,12 +2343,14 @@ function Workspace({
                 return (
                   <Fragment key={fid}>
                     <div
-                      className={`side-folder ${sideOpen(fid) ? 'open' : ''}`}
+                      className={`side-folder tree-row ${sideOpen(fid) ? 'open' : ''}`}
+                      style={{ ['--depth' as string]: 0 }}
                       onClick={() => toggleSide(fid)}
                     >
                       <span className="ico chev" aria-hidden>
                         <IcoChevron />
                       </span>
+                      {sideOpen(fid) ? <IcoOpen /> : <IcoFolder />}
                       <span className="label">{folder.key}</span>
                       <span className="sec-count">{items.length}</span>
                     </div>
@@ -2400,7 +2405,8 @@ function Workspace({
                 return (
                   <div key={remote} className="side-remote-block">
                     <div
-                      className={`side-sec sub toggle ${sideOpen(rid) ? 'open' : ''}`}
+                      className={`side-sec sub toggle tree-row ${sideOpen(rid) ? 'open' : ''}`}
+                      style={{ ['--depth' as string]: 0 }}
                       onClick={() => toggleSide(rid)}
                       onContextMenu={(e) => {
                         e.preventDefault()
@@ -2422,12 +2428,14 @@ function Workspace({
                           return (
                             <Fragment key={fid}>
                               <div
-                                className={`side-folder indent ${sideOpen(fid) ? 'open' : ''}`}
+                                className={`side-folder tree-row indent ${sideOpen(fid) ? 'open' : ''}`}
+                                style={{ ['--depth' as string]: 1 }}
                                 onClick={() => toggleSide(fid)}
                               >
                                 <span className="ico chev" aria-hidden>
                                   <IcoChevron />
                                 </span>
+                                {sideOpen(fid) ? <IcoOpen /> : <IcoFolder />}
                                 <span className="label">{folder.key}</span>
                                 <span className="sec-count">{folder.items.length}</span>
                               </div>
@@ -2457,7 +2465,8 @@ function Workspace({
           </div>
           {sideOpen('tags') &&
             snap.tags.filter((t) => match(t.name)).map((t) => (
-              <div key={t.name} className="side-item" onClick={() => setSel({ kind: 'tag', name: t.name })}>
+              <div key={t.name} className="side-item tree-row" onClick={() => setSel({ kind: 'tag', name: t.name })}>
+                <span className="twisty" aria-hidden />
                 <IcoTag />
                 <span className="label">{t.name}</span>
               </div>
@@ -4480,13 +4489,13 @@ function SettingsDialog({
                   id: 'light' as const,
                   label: 'Light',
                   blurb: 'Bright chrome and paper panels.',
-                  preview: settings?.themePack === 'spoon' ? ['#f1ecfb', '#faf8ff', '#7834da'] : ['#f3f3f3', '#ffffff', '#0b57d0']
+                  preview: ['#f3f3f3', '#ffffff', '#0b57d0']
                 },
                 {
                   id: 'dark' as const,
                   label: 'Dark',
                   blurb: 'Dim chrome with soft contrast.',
-                  preview: settings?.themePack === 'spoon' ? ['#17112d', '#110c24', '#8339e3'] : ['#2d2d2d', '#1e1e1e', '#6cb6ff']
+                  preview: ['#2d2d2d', '#1e1e1e', '#6cb6ff']
                 }
               ] as const
             ).map((item) => {

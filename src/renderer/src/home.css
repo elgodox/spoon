@@ -896,7 +896,7 @@ html[data-theme='dark'] .manager.home {
 
   .manager.home .row-tools .spoon-button[data-button-variant='icon'] { width: 22px; height: 22px; min-width: 22px; min-height: 22px; border-radius: 6px; }
   .manager.home .home-search-clear { width: 20px; height: 20px; min-width: 20px; min-height: 20px; border-radius: 5px; }
-  .manager.home .side-sec-tools .spoon-button[data-button-variant='link'] { min-height: 20px; padding: 0 4px; font-size: 11px; font-weight: 600; }
-  .manager.home .side-filter .menu-select-btn { height: 32px; min-height: 32px; border-radius: 8px; background: var(--bg); font-size: 12.5px; }
+  .manager.home .side-sec-tools .spoon-button[data-button-variant='link'] { min-height: 20px; padding: 0 4px; font-size: 12px; font-weight: 600; }
+  .manager.home .side-filter .menu-select-btn { height: 32px; min-height: 32px; border-radius: 8px; background: var(--bg); font-size: 12px; }
   .manager.home .picked-list .spoon-button[data-button-variant='link'] { color: var(--text); font-weight: 600; padding: 0; min-height: 0; }
 }

@@ -151,7 +151,7 @@ export async function launch(box, opts = {}) {
   const seed = {
     settings: {
       appearanceVersion: 3,
-      themePack: 'spoon',
+      themePack: 'classic',
       theme: 'dark',
       onboarded: true,
       autoUpdate: false,

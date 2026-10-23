@@ -25,9 +25,11 @@ function c(hash: string, parents: string[]): CommitInfo {
 
 const linear = layoutGraph([c('c3', ['c2']), c('c2', ['c1']), c('c1', [])])
 if (linear[0].lane !== 0 || linear[2].lane !== 0) throw new Error('linear lanes')
+if (!linear[0].tip || linear[1].tip || linear[2].tip) throw new Error('only the newest commit is a tip')
 
 const merge = layoutGraph([c('m', ['a', 'b']), c('a', ['r']), c('b', ['r']), c('r', [])])
 if (merge[0].mergeLanes.length !== 1) throw new Error('merge lane missing')
 if (!merge[1].lanesIn.includes(0) || !merge[1].lanesOut.includes(0)) throw new Error('through lane missing')
+if (merge[2].tip) throw new Error('a merged-in parent is not a tip')
 
 console.log('graph tests ok')

@@ -40,7 +40,7 @@ export function openWithMenuItems(
   return items
 }
 
-const LANE_COLORS = ['#b18aff', '#67a8ff', '#f18cde', '#56d7c0', '#f3ba72', '#9295ff', '#ff879b', '#b5cf77']
+const LANE_COLORS = ['#5b9dff', '#3ecf8e', '#f5a524', '#2dd4bf', '#ff7a85', '#7dd3fc', '#e5c07b', '#a3e635']
 
 export function laneColor(lane: number): string {
   return LANE_COLORS[Math.abs(lane) % LANE_COLORS.length]
@@ -100,7 +100,7 @@ export function initials(name: string): string {
 }
 
 export function avatarColor(seed: string): string {
-  const colors = ['#43a047', '#1e88e5', '#8e24aa', '#fb8c00', '#e53935', '#00897b', '#3949ab', '#6d4c41']
+  const colors = ['#43a047', '#1e88e5', '#546e7a', '#fb8c00', '#e53935', '#00897b', '#0277bd', '#6d4c41']
   let h = 0
   for (let i = 0; i < seed.length; i++) h = (h * 33 + seed.charCodeAt(i)) >>> 0
   return colors[h % colors.length]

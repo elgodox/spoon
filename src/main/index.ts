@@ -80,8 +80,8 @@ function windowChrome() {
     return {
       dark: true,
       material,
-      background: pack === 'spoon' ? '#110c24' : '#1e1e1e',
-      bar: pack === 'spoon' ? '#17112d' : '#2d2d2d',
+      background: '#1e1e1e',
+      bar: '#2d2d2d',
       symbol: '#e8e8e8',
       overlayHeight: 40
     }
@@ -89,8 +89,8 @@ function windowChrome() {
   return {
     dark: false,
     material,
-    background: pack === 'spoon' ? '#faf8ff' : '#ffffff',
-    bar: pack === 'spoon' ? '#f1ecfb' : '#f3f3f3',
+    background: '#ffffff',
+    bar: '#f3f3f3',
     symbol: '#1f1f1f',
     overlayHeight: 40
   }

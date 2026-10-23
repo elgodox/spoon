@@ -54,6 +54,15 @@ test('legacy settings migrate: any older appearance resets to Classic with color
   assert.equal(file().settings.appearanceVersion, 3)
 })
 
+test('users of the retired violet Spoon pack move to Classic with the blue accent', async () => {
+  const { store } = await freshStore({ settings: { appearanceVersion: 3, themePack: 'spoon', accentId: 'violet', iconStyle: 'mono', theme: 'dark' } })
+  const s = store.getSettings()
+  assert.equal(s.themePack, 'classic')
+  assert.equal(s.accentId, 'blue')
+  assert.equal(s.iconStyle, 'mono')
+  assert.equal(s.theme, 'dark')
+})
+
 test('customised appearance is kept and invalid values are sanitised', async () => {
   const { store } = await freshStore({ settings: { appearanceVersion: 3, themePack: 'colored', accentId: 'nope', iconStyle: 'weird', theme: 'purple' } })
   const s = store.getSettings()

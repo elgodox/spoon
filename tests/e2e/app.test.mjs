@@ -36,7 +36,7 @@ after(async () => {
 
 test('Appearance: theme packs, light/dark, icon style and accent apply and persist', async () => {
   await openPrefs('Appearance')
-  for (const pack of ['classic', 'colored', 'spoon']) {
+  for (const pack of ['colored', 'classic']) {
     await prefs().locator(`.theme-pack-card.pack-${pack}`).click()
     await ui.until(async () => (await html('pack')) === pack, `pack ${pack}`)
   }
@@ -47,13 +47,14 @@ test('Appearance: theme packs, light/dark, icon style and accent apply and persi
   await prefs().locator('.theme-pack-card.pack-spacex').click()
   await ui.until(async () => (await html('pack')) === 'spacex' && (await html('theme')) === 'dark', 'SpaceX is dark')
   assert.equal(await prefs().locator('.theme-pack-card.mode-light').isDisabled(), true)
-  await prefs().locator('.theme-pack-card.pack-spoon').click()
+  assert.equal(await prefs().locator('.theme-pack-card.pack-spoon').count(), 0)
+  await prefs().locator('.theme-pack-card.pack-classic').click()
   await prefs().locator('.icons-mono').click()
   await ui.until(async () => (await html('icons')) === 'mono', 'mono icons')
   await prefs().locator('.icons-color').click()
   await prefs().getByRole('button', { name: 'Teal', exact: true }).click()
   await ui.until(() => settingsFile().settings.accentId === 'teal', 'accent saved')
-  assert.equal(settingsFile().settings.themePack, 'spoon')
+  assert.equal(settingsFile().settings.themePack, 'classic')
   assert.equal(settingsFile().settings.iconStyle, 'color')
 })
 

@@ -44,7 +44,7 @@ function writeBmp(width, height, rgb, dest) {
 async function bmp(width, height, dest, { padTop = 0 } = {}) {
   const iconSize = Math.round(Math.min(width, height) * 0.62)
   const icon = await sharp(svg)
-    .resize(iconSize, iconSize, { fit: 'contain', background: { r: 91, g: 33, b: 182, alpha: 1 } })
+    .resize(iconSize, iconSize, { fit: 'contain', background: { r: 37, g: 99, b: 235, alpha: 1 } })
     .png()
     .toBuffer()
   const rgb = await sharp({
@@ -52,7 +52,7 @@ async function bmp(width, height, dest, { padTop = 0 } = {}) {
       width,
       height,
       channels: 3,
-      background: { r: 91, g: 33, b: 182 }
+      background: { r: 37, g: 99, b: 235 }
     }
   })
     .composite([

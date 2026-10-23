@@ -1279,15 +1279,13 @@ function summarize(overviews: Record<string, RepoOverview>, recent: RepoSummary[
 function SpoonMark() {
   return (
     <svg viewBox="0 0 24 24" className="spoon-svg" aria-hidden>
-      <ellipse cx="8.2" cy="8.4" rx="4.4" ry="5.6" fill="currentColor" />
-      <path
-        d="M10.4 12.2c2.4 2.5 6.2 6.6 8.8 9.2"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.1"
-        strokeLinecap="round"
-      />
-      <ellipse cx="7.4" cy="8.6" rx="2.2" ry="3.2" fill="none" stroke="var(--bg)" strokeWidth="1.4" opacity="0.55" />
+      <g transform="translate(12 12) scale(.028) translate(-522 -496) rotate(-45 512 512)" fill="none" stroke="currentColor" strokeLinecap="round">
+        <path d="M512 560 C512 660 660 640 660 740" strokeWidth="60" />
+        <circle cx="660" cy="764" r="70" fill="currentColor" stroke="none" />
+        <ellipse cx="512" cy="288" rx="138" ry="176" fill="currentColor" stroke="none" />
+        <path d="M512 440 V800" strokeWidth="68" />
+        <circle cx="512" cy="830" r="78" fill="currentColor" stroke="none" />
+      </g>
     </svg>
   )
 }
