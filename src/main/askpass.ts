@@ -13,34 +13,47 @@ import type { CredentialAnswer, CredentialRequest } from '../shared/types'
 // when it is missing or could not answer.
 
 // Electron's GUI-subsystem exe does not reliably hand stdout to Git on Windows, so the helper
-// writes the answer to a temp file and the shell wrapper prints it.
+// writes the answer to a temp file and the shell wrapper prints it. Git for Windows' sh hands
+// out MSYS paths (/tmp/...) that Windows node would resolve against the current drive, so the
+// helper gets the native path from cygpath while sh keeps the MSYS one.
 const WRAPPER = `#!/bin/sh
-SPOON_ASKPASS_OUT=\`mktemp\`
+tmp=\`mktemp\`
+SPOON_ASKPASS_OUT=$tmp
+if command -v cygpath >/dev/null 2>&1; then SPOON_ASKPASS_OUT=\`cygpath -w "$tmp"\`; fi
 export SPOON_ASKPASS_OUT
 ELECTRON_RUN_AS_NODE=1 "$SPOON_ASKPASS_NODE" "$SPOON_ASKPASS_MAIN" "$@"
 status=$?
-cat "$SPOON_ASKPASS_OUT"
-rm -f "$SPOON_ASKPASS_OUT"
+cat "$tmp"
+rm -f "$tmp"
 exit $status
 `
 
+// Request and reply are one JSON line each. Windows named pipes do not half-close reliably,
+// so the helper never ends its side to mark the request complete; the newline does that.
 const HELPER = `const net = require('net')
 const fs = require('fs')
 const socket = net.connect(process.env.SPOON_ASKPASS_HANDLE)
 let data = ''
-socket.setEncoding('utf8')
-socket.on('connect', () => socket.end(JSON.stringify({ token: process.env.SPOON_ASKPASS_TOKEN, prompt: process.argv.slice(2).join(' ') })))
-socket.on('data', (chunk) => { data += chunk })
-socket.on('error', () => process.exit(1))
-socket.on('close', () => {
+let done = false
+const finish = () => {
+  if (done) return
+  done = true
   let reply
-  try { reply = JSON.parse(data) } catch { process.exit(1) }
+  try { reply = JSON.parse(data.split('\\n')[0]) } catch { process.exit(1) }
   if (!reply || !reply.ok) process.exit(1)
   const out = process.env.SPOON_ASKPASS_OUT
   if (out) fs.writeFileSync(out, reply.value + '\\n')
   else process.stdout.write(reply.value + '\\n')
   process.exit(0)
+}
+socket.setEncoding('utf8')
+socket.on('connect', () => socket.write(JSON.stringify({ token: process.env.SPOON_ASKPASS_TOKEN, prompt: process.argv.slice(2).join(' ') }) + '\\n'))
+socket.on('data', (chunk) => {
+  data += chunk
+  if (data.includes('\\n')) finish()
 })
+socket.on('error', () => process.exit(1))
+socket.on('close', finish)
 `
 
 /** Read Git's and SSH's prompt text: what is asked, and for which remote. */
@@ -103,17 +116,14 @@ export async function startAskpass(
   const handle = process.platform === 'win32' ? `\\\\.\\pipe\\${id}` : join(tmpdir(), `${id}.sock`)
   const server = createServer({ allowHalfOpen: true }, (socket) => {
     let data = ''
-    socket.setEncoding('utf8')
-    socket.on('error', () => {})
-    socket.on('data', (chunk: string) => {
-      data += chunk
-      if (data.length > 65_536) socket.destroy()
-    })
-    socket.on('end', () => {
+    let answered = false
+    const answer = (line: string) => {
+      if (answered) return
+      answered = true
       void (async () => {
         let reply: { ok: boolean; value?: string } = { ok: false }
         try {
-          const request = JSON.parse(data) as { token?: string; prompt?: string }
+          const request = JSON.parse(line) as { token?: string; prompt?: string }
           if (request.token === token) {
             const value = await respond(String(request.prompt ?? ''))
             if (value != null) reply = { ok: true, value }
@@ -121,9 +131,21 @@ export async function startAskpass(
         } catch {
           /* malformed request or a failed dialog: Git sees a refusal */
         }
-        if (!socket.destroyed) socket.end(JSON.stringify(reply))
+        if (!socket.destroyed) socket.end(JSON.stringify(reply) + '\n')
       })()
+    }
+    socket.setEncoding('utf8')
+    socket.on('error', () => {})
+    socket.on('data', (chunk: string) => {
+      if (answered) return
+      data += chunk
+      const newline = data.indexOf('\n')
+      const request = newline >= 0 ? data.slice(0, newline) : data
+      if (request.length > 65_536) socket.destroy()
+      else if (newline >= 0) answer(request)
     })
+    // A client that half-closes without a newline still gets an answer.
+    socket.on('end', () => answer(data))
   })
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject)
