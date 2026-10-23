@@ -418,7 +418,19 @@ export async function resolveCreds(provider: AiProviderId): Promise<StoredAiCred
     }
   }
   if (provider === 'grok') creds = await refreshGrok(creds)
+  if (provider === 'claude') creds = refreshClaudeImport(creds)
   return creds
+}
+
+// Claude Code rotates its own token every few hours; re-read it instead of refreshing (that would log Claude Code out).
+function refreshClaudeImport(creds: StoredAiCreds): StoredAiCreds {
+  if (creds.method !== 'imported' || !creds.expiresAt || creds.expiresAt - 60_000 > Date.now()) return creds
+  const local = readClaudeLocal()
+  if (local?.accessToken && local.accessToken !== creds.accessToken) {
+    saveCreds(local)
+    if (!local.expiresAt || local.expiresAt - 60_000 > Date.now()) return local
+  }
+  throw new Error('Claude session expired. Open Claude Code once to renew it, then try again.')
 }
 
 export function providerLabel(id: AiProviderId): string {

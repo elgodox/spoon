@@ -1,7 +1,7 @@
 import { app, nativeTheme, safeStorage } from 'electron'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { DEFAULT_AI_MODELS, fallbackAiProvider } from '../shared/models'
+import { DEFAULT_AI_MODELS, fallbackAiProvider, RETIRED_CLAUDE_MODELS } from '../shared/models'
 import { launcherFromEditor } from '../shared/launchers'
 import type { AiProviderId, AppSession, RepoSummary, RepoWorkspace, SessionTab, Settings, ThemeMode } from '../shared/types'
 import {
@@ -83,6 +83,7 @@ function filePath(): string {
 function sanitizeAiModels(models: Record<string, string>): Record<string, string> {
   const next = { ...models }
   delete next.free
+  if (RETIRED_CLAUDE_MODELS.includes(next.claude)) next.claude = DEFAULT_AI_MODELS.claude
   return next
 }
 

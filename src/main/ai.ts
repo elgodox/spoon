@@ -1,4 +1,5 @@
 import { findAiSite, openAiUrl } from '../shared/ai-catalog'
+import { DEFAULT_AI_MODELS } from '../shared/models'
 import type { AiEndpointConfig, AiProviderId, ChangeAnalysis, ChangeBriefFile, RepoSummary, WorkspaceAnalysis } from '../shared/types'
 import { fallbackWorkspaceAnalysis, parseWorkspaceAnalysis } from '../shared/workspaces'
 import { fallbackAnalysis, fileDependencies, parseAnalysis, repairCommitOrder } from './analysis'
@@ -350,7 +351,7 @@ async function claudeComplete(
   user: string,
   system = SYSTEM,
   maxTokens = 400,
-  model = 'claude-sonnet-4-5'
+  model = DEFAULT_AI_MODELS.claude
 ): Promise<string> {
   const token = creds.apiKey || creds.accessToken
   if (!token) throw new Error('Claude is not connected.')

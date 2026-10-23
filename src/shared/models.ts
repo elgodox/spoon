@@ -20,18 +20,23 @@ export const AI_MODELS: Record<string, { id: string; label: string }[]> = {
     { id: 'gpt-4o-mini', label: 'GPT-4o mini' }
   ],
   claude: [
-    { id: 'claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+    { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
+    { id: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
+    { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5' },
+    { id: 'claude-fable-5-1', label: 'Claude Fable 5.1' },
     { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
-    { id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
-    { id: 'claude-3-5-sonnet-latest', label: 'Claude 3.5 Sonnet' }
+    { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6' }
   ]
 }
 
 export const DEFAULT_AI_MODELS: Record<string, string> = {
   grok: 'grok-4.7',
   chatgpt: 'gpt-4o',
-  claude: 'claude-sonnet-4-5'
+  claude: 'claude-sonnet-5-5'
 }
+
+// Old built-in Claude defaults the API no longer serves; saved settings move to the current default.
+export const RETIRED_CLAUDE_MODELS = ['claude-sonnet-4-5', 'claude-sonnet-4-20250514', 'claude-3-5-sonnet-latest']
 
 export function fallbackAiProvider(id?: string | null): AiProviderId {
   if (!id || id === 'free') return 'grok'
