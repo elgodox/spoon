@@ -60,6 +60,7 @@ Legend: U = unit test, E = end-to-end test.
 | Add a repo, or a folder of repos (warns when there are none) | E `home` |
 | New repository (`git init` + README commit) | E `home`, U `git-repos` |
 | Clone (progress, custom folder name, error) | E `home`, U `git-repos` |
+| Credential prompt: clone / push / fetch from a password-protected remote ask in a Spoon dialog; background fetch never asks | E `home`, U `askpass` |
 | Repo row menu: pin, remove, fetch… | E `home` |
 | Overview cache (`repo-records.json`) | U `main-services` |
 | Activity heat map (day/week/month/year buckets) | U `shared`, U `git-refs` (`activityDays`) |

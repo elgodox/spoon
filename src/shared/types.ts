@@ -324,6 +324,8 @@ export interface FetchOptions {
   prune?: boolean
   all?: boolean
   tags?: boolean
+  /** Automatic fetch: never stop to ask for credentials. */
+  background?: boolean
 }
 
 export interface PullOptions {
@@ -475,4 +477,24 @@ export interface ChangeBriefFile {
   path: string
   status: string
   patch: string
+}
+
+/** What Git or SSH asked for when it needed credentials during a network operation. */
+export type CredentialKind = 'username' | 'password' | 'confirm' | 'text'
+
+export interface CredentialRequest {
+  prompt: string
+  kind: CredentialKind
+  /** Remote the credential is for, e.g. `https://github.com` (Git username/password prompts only). */
+  target?: string
+}
+
+export interface CredentialPromptEvent extends CredentialRequest {
+  id: string
+}
+
+/** `password` rides along with a username answer so Git's follow-up password prompt is not shown. */
+export interface CredentialAnswer {
+  value: string
+  password?: string
 }

@@ -148,7 +148,7 @@ Output: `dist/Spoon-Setup-<version>.exe`.
 
 Fetch, pull, push, commit, amend, branches, tags, remotes, checkout, merge, rebase (including interactive), cherry-pick, revert, reset, stash, submodules, blame, file history, file tree, reflog, conflicts, LFS listing, worktrees.
 
-Remote authentication uses Git Credential Manager from Git for Windows.
+Remote authentication uses Git Credential Manager from Git for Windows. When no credential helper can answer, Spoon asks for the username and password (or personal access token) itself, and for SSH passphrases and host-key confirmations.
 
 ## Contributing
 
