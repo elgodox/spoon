@@ -170,7 +170,8 @@ test('Interactive rebase can drop a commit and keeps the order of the others', a
   const victim = before[1]
   await dialog.locator('.rebase-item').filter({ hasText: victim }).locator('select').selectOption('drop')
   await dialog.getByRole('button', { name: 'Start', exact: true }).click()
-  await ui.until(() => !subjects(repo).includes(victim), 'commit dropped', 30_000)
+  // Wait for the whole rebase: mid-way the victim is already gone but newer commits aren't replayed yet.
+  await ui.until(() => !subjects(repo).includes(victim) && subjects(repo)[0] === before[0], 'commit dropped', 30_000)
   assert.deepEqual(subjects(repo).slice(0, 3), [before[0], before[2], before[3]])
 })
 
