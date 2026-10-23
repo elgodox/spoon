@@ -148,6 +148,7 @@ const api = {
     about: () => ipcRenderer.invoke('app:about'),
     openIn: (path: string, target: 'editor' | 'terminal' | 'explorer') => ipcRenderer.invoke('app:openIn', path, target),
     launchers: (force?: boolean) => ipcRenderer.invoke('app:launchers', force),
+    launcherIcon: (launcherId?: string) => ipcRenderer.invoke('app:launcherIcon', launcherId),
     openWith: (path: string, launcherId?: string) => ipcRenderer.invoke('app:openWith', path, launcherId),
     setDefaultLauncher: (id: string) => ipcRenderer.invoke('app:setDefaultLauncher', id),
     update: () => ipcRenderer.invoke('app:update'),

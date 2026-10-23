@@ -18,6 +18,7 @@ import { launcherById } from '../../src/shared/launchers.ts'
 /**
  * A folder on PATH with a fake `code.cmd` laid out like the real VS Code shim
  * ("%~dp0<exe>" "%~dp0<cli.js>" %*). The "exe" is node itself; cli.js records its arguments.
+ * Like the real one it also has an extensionless `code` bash script, which `where code` lists first.
  */
 function fakeEditor() {
   const bin = sandboxDir('bin-')
@@ -30,6 +31,7 @@ function fakeEditor() {
   }
   mkdirSync(join(bin, 'resources'))
   writeFileSync(join(bin, 'resources', 'cli.js'), `require('fs').appendFileSync(${JSON.stringify(out)}, JSON.stringify(process.argv.slice(2)) + '\\n')`)
+  writeFileSync(join(bin, 'code'), '#!/usr/bin/env sh\nexec "$(dirname "$0")/FakeEditor.exe" "$@"\n')
   writeFileSync(join(bin, 'code.cmd'), '@echo off\r\n"%~dp0FakeEditor.exe" "%~dp0resources\\cli.js" %*\r\n')
   return { bin, out }
 }
@@ -65,6 +67,7 @@ test('listLaunchers detects tools on PATH and always offers terminal and explore
     const by = Object.fromEntries(list.map((l) => [l.id, l]))
     assert.equal(by.code.available, true)
     assert.equal(by.code.command, 'code')
+    assert.equal(by.code.path, join(bin, 'code.cmd'), 'the extensionless bash shim is skipped')
     assert.equal(by.terminal.available, true)
     assert.equal(by.explorer.available, true)
     assert.ok(list.find((l) => l.available && l.kind === 'ide'))
@@ -101,6 +104,80 @@ test('openWith passes a folder with special characters to the IDE as one argumen
     await launchers.openWith(folder, 'code')
     const args = await lastArgs(out)
     assert.deepEqual(args, [folder])
+  })
+})
+
+test('findOnPath follows PATH order, prefers .exe over .cmd and skips extensionless shims', () => {
+  const files = new Set(['C:\\a\\code', 'C:\\b\\code.cmd', 'C:\\b\\code.exe', 'C:\\c\\claude.exe'].map((f) => f.toLowerCase()))
+  const exists = (file: string) => files.has(file.toLowerCase())
+  assert.equal(launchers.findOnPath('code', ['C:\\a', 'C:\\b'], exists), 'C:\\b\\code.exe')
+  assert.equal(launchers.findOnPath('claude', ['C:\\a', 'C:\\b', 'C:\\c'], exists), 'C:\\c\\claude.exe')
+  assert.equal(launchers.findOnPath('code.cmd', ['C:\\b'], exists), 'C:\\b\\code.cmd')
+  assert.equal(launchers.findOnPath('missing', ['C:\\a', 'C:\\b'], exists), undefined)
+})
+
+test('mergeDirs expands variables and drops duplicates; knownBinDirs covers CLI installers', () => {
+  const env = { USERPROFILE: 'C:\\Users\\me', APPDATA: 'C:\\Users\\me\\AppData\\Roaming', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' }
+  assert.deepEqual(
+    launchers.mergeDirs(['C:\\Windows;%USERPROFILE%\\.local\\bin\\;;', 'c:\\windows;"C:\\Tools"', '%NOPE%\\x'], env),
+    ['C:\\Windows', 'C:\\Users\\me\\.local\\bin', 'C:\\Tools', '%NOPE%\\x']
+  )
+  const known = launchers.knownBinDirs(env)
+  assert.ok(known.includes('C:\\Users\\me\\.local\\bin'), 'native Claude Code installer')
+  assert.ok(known.includes('C:\\Users\\me\\AppData\\Roaming\\npm'), 'npm global installs')
+})
+
+test('listLaunchers finds the Claude Code CLI even when Spoon started with a stale PATH', async () => {
+  // The native installer puts claude.exe in %USERPROFILE%\.local\bin (the sandbox home here).
+  const bin = join(process.env.USERPROFILE!, '.local', 'bin')
+  mkdirSync(bin, { recursive: true })
+  copyFileSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'whoami.exe'), join(bin, 'claude.exe'))
+  const original = process.env.PATH
+  process.env.PATH = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32')
+  try {
+    const { launchers: list } = await launchers.listLaunchers(true)
+    const claude = list.find((l) => l.id === 'claude')!
+    assert.equal(claude.available, true)
+    assert.match(claude.path!, /claude\.exe$/i)
+  } finally {
+    process.env.PATH = original
+    launchers.clearLauncherCache()
+  }
+})
+
+test('CLI launchers open a terminal in the repo folder; the folder is never on a command line', () => {
+  const cli = 'C:\\Users\\Jane Doe\\.local\\bin\\claude.exe'
+  const wt = 'C:\\Users\\Jane Doe\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe'
+  assert.deepEqual(launchers.cliPlan('Claude Code', cli, [], wt), { file: wt, args: ['-d', '.', 'cmd', '/k', cli] })
+  const fallback = launchers.cliPlan('Claude Code', cli)
+  assert.equal(fallback.file, 'cmd.exe')
+  assert.equal(fallback.verbatim, true)
+  assert.deepEqual(fallback.args.slice(0, 3), ['/d', '/s', '/c'])
+  assert.equal(fallback.args[3], `"start "Claude Code" cmd /k "${cli}""`)
+  assert.deepEqual(launchers.terminalPlan('pwsh.exe', wt), { file: wt, args: ['-d', '.'] })
+  assert.equal(launchers.terminalPlan('C:\\Program Files\\PowerShell\\7\\pwsh.exe').args[3], '"start "Spoon" "C:\\Program Files\\PowerShell\\7\\pwsh.exe" -NoExit -NoLogo"')
+})
+
+test('idePlan starts the editor itself, not the bash shim or cmd.exe', () => {
+  const { bin } = fakeEditor()
+  const folder = 'C:\\work\\R&D'
+  const plan = launchers.idePlan(join(bin, 'code.cmd'), folder)
+  assert.equal(plan.file, join(bin, 'FakeEditor.exe'))
+  assert.deepEqual(plan.args, [join(bin, 'resources', 'cli.js'), folder])
+  assert.deepEqual(launchers.idePlan('C:\\Zed\\zed.exe', folder), { file: 'C:\\Zed\\zed.exe', args: [folder] })
+  const other = join(bin, 'other.cmd')
+  writeFileSync(other, '@echo off\r\nstart "" something %*\r\n')
+  assert.deepEqual(launchers.idePlan(other, folder), { file: 'cmd.exe', args: ['/d', '/s', '/c', `""${other}" "${folder}""`], verbatim: true })
+})
+
+test('a launcher that cannot start is reported instead of crashing the main process', async () => {
+  const dir = sandboxDir('broken-')
+  await assert.rejects(launchers.startDetached({ file: join(dir, 'missing.exe'), args: [] }, dir), /ENOENT/)
+  // A VS Code-style shim whose editor was uninstalled falls back to cmd.exe, which fails.
+  const bin = sandboxDir('bin-')
+  writeFileSync(join(bin, 'code.cmd'), '@echo off\r\n"%~dp0Gone.exe" "%~dp0resources\\cli.js" %*\r\n')
+  await withPath(bin, async () => {
+    await assert.rejects(launchers.openWith(dir, 'code'), /Could not open VS Code/)
   })
 })
 
