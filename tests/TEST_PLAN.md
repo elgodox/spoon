@@ -49,6 +49,9 @@ Legend: U = unit test, E = end-to-end test.
 | Status chips (Uncommitted / Behind / To push / Attention) | E `home` |
 | Selection with click, Ctrl/Shift, Select all, Clear | E `home` |
 | Pin / unpin | E `home` |
+| Sidebar sections fold (persist `homeCollapsed`), folded status digest, filter unfolds | E `home` |
+| Arrow / Home / End keys move the selection, Shift+arrow extends it | E `home` |
+| Workspaces unfold into their repos (persist `homeExpanded`), drag repos onto a workspace, remove a member | E `home` |
 | Save selection as a workspace; edit, recolour, delete | E `home`, U `store`, U `shared` |
 | Workspaces manager and AI workspace suggestions | E `ai`, U `ai` |
 | Open by double-click; close tabs back to Home | E `home` |

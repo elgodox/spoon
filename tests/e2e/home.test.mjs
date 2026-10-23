@@ -112,6 +112,72 @@ test('save a selection as a workspace, edit it and delete it', async () => {
   await ui.until(() => settingsFile().workspaces.length === 0, 'workspace deleted')
 })
 
+test('sidebar sections fold, persist, and show a status digest while folded', async () => {
+  const toggle = page.getByRole('button', { name: /^Repositories \d+$/ })
+  await toggle.click()
+  await ui.until(() => settingsFile().settings.homeCollapsed?.includes('repos'), 'fold saved')
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false')
+  await page.locator('section[aria-label="Repository list"] .sec-pulse .metric.warn').waitFor()
+  // A filter shows matches even inside a folded section.
+  await page.getByPlaceholder('Filter repositories').fill('alp')
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'true')
+  await page.getByRole('button', { name: 'Clear filter' }).click()
+  await toggle.click()
+  await ui.until(() => !settingsFile().settings.homeCollapsed?.includes('repos'), 'unfold saved')
+})
+
+test('arrow keys move the selection and Shift+arrow extends it', async () => {
+  await page.getByRole('button', { name: 'Sort repositories' }).click()
+  await page.getByRole('option', { name: 'Name' }).click()
+  await repoRow('alpha').click()
+  await page.keyboard.press('ArrowDown')
+  await page.locator('.home-side .repo-row.active', { hasText: 'beta' }).waitFor()
+  await page.keyboard.press('Shift+ArrowDown')
+  await page.locator('section[aria-label="Selected repositories"] h2', { hasText: '2 repositories selected' }).waitFor()
+  await page.getByRole('button', { name: /^Clear \(2\)/ }).click()
+  await page.getByRole('button', { name: 'Sort repositories' }).click()
+  await page.getByRole('option', { name: 'Last opened' }).click()
+})
+
+test('workspaces unfold into their repositories, take dropped repos, and drop members', async () => {
+  await repoRow('alpha').click()
+  await repoRow('beta').click({ modifiers: ['Control'] })
+  await page.getByRole('button', { name: 'Save the selection as a workspace', exact: true }).click()
+  await ui.until(() => settingsFile().workspaces?.length === 1, 'workspace saved')
+  const ws = settingsFile().workspaces[0]
+  await toolbar(page, 'home')
+  const wsRow = page.locator('.workspace-row').filter({ hasText: ws.name })
+  await page.getByRole('button', { name: `Show repositories in ${ws.name}`, exact: true }).click()
+  await ui.until(() => settingsFile().settings.homeExpanded?.includes(ws.id), 'unfold saved')
+  const members = page.locator(`[aria-label="Repositories in ${ws.name}"] .ws-member`)
+  await ui.until(async () => (await members.count()) === 2, 'two members listed')
+  await repoRow('dirty').dragTo(wsRow)
+  await ui.until(() => settingsFile().workspaces[0].repos.length === 3, 'dropped repo added')
+  await ui.pickMenu(() => members.filter({ hasText: 'dirty' }).click({ button: 'right' }), 'remove')
+  await ui.until(() => settingsFile().workspaces[0].repos.length === 2, 'member removed')
+  await ui.confirmNext(true)
+  await wsRow.hover()
+  await page.getByRole('button', { name: `Delete ${ws.name}`, exact: true }).click()
+  await ui.until(() => settingsFile().workspaces.length === 0, 'workspace deleted')
+})
+
+test('sidebar collapses to an icon rail and back, and remembers it', async () => {
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
+  await page.locator('.home-side.home-rail').waitFor()
+  await ui.until(() => settingsFile().settings.homeRail === true, 'rail saved')
+  const beta = page.locator('.home-rail .rail-repo[aria-label="beta"]')
+  await beta.click()
+  await page.locator('.home-rail .rail-repo.active[aria-label="beta"]').waitFor()
+  await page.locator('.manager.home > .splitbar.x').dblclick()
+  await page.locator('.home-side .repo-row').first().waitFor()
+  await ui.until(() => settingsFile().settings.homeRail === false, 'rail closed')
+  assert.equal(await page.locator('.home-rail').count(), 0)
+  // The rail's search button reopens the sidebar with the filter focused.
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
+  await page.locator('.home-rail').getByRole('button', { name: 'Filter repositories' }).click()
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === 'Filter repositories')
+})
+
 test('double-click opens a repository in a tab; closing the last tab returns to Home', async () => {
   await repoRow('alpha').dblclick()
   await page.locator('.tabs .tab.active', { hasText: 'alpha' }).waitFor()

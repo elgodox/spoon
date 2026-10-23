@@ -290,6 +290,12 @@ export interface Settings {
   glass: number
   windowBounds?: { x: number; y: number; width: number; height: number }
   repoSort: RepoSort
+  /** Home sidebar sections the user collapsed ('workspaces', 'pinned', 'repos'). */
+  homeCollapsed?: string[]
+  /** Workspace ids whose repositories are unfolded in the Home sidebar. */
+  homeExpanded?: string[]
+  /** Home sidebar shrunk to an icon rail. */
+  homeRail?: boolean
 }
 
 export interface RebaseTodoItem {

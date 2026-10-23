@@ -1,5 +1,5 @@
 import { Button } from './Button'
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from 'react'
 import type { BulkResult, RepoHealth, RepoIssue, RepoOverview, RepoSort, RepoSummary, RepoWorkspace, Settings } from '../../shared/types'
 import type { LauncherInfo } from '../../shared/launchers'
 import {
@@ -25,7 +25,7 @@ import {
   IcoWorkspaces,
   IcoWrench
 } from './icons'
-import { Pencil, Search, X } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Pencil, Search, X } from 'lucide-react'
 import { avatarColor, bindDrag, clamp, catchErr, formatAgo, initials, openMenu, openWithMenuItems } from './lib'
 import { RecentWork } from './RecentWork'
 
@@ -33,6 +33,17 @@ import { RecentWork } from './RecentWork'
 let overviewMemo: Record<string, RepoOverview> = {}
 
 type StatusFilter = 'all' | 'dirty' | 'behind' | 'ahead' | 'blocked'
+
+type SectionKey = 'workspaces' | 'pinned' | 'repos'
+const SECTIONS: SectionKey[] = ['workspaces', 'pinned', 'repos']
+
+/** Drag payload for repository rows: a JSON list of paths. */
+const DRAG_REPOS = 'application/x-spoon-repos'
+
+const RAIL_WIDTH = 56
+/** Dragging the edge past this reopens the rail; letting go left of RAIL_CLOSE_AT folds the sidebar into it. */
+const RAIL_OPEN_AT = 160
+const RAIL_CLOSE_AT = 130
 
 type Props = {
   recent: RepoSummary[]
@@ -52,6 +63,7 @@ type Props = {
   onAddToWorkspace: (workspace: RepoWorkspace, paths: string[]) => void
   onDeleteWorkspace: (id: string) => void
   onEditWorkspace: (workspace: RepoWorkspace) => void
+  onRemoveFromWorkspace: (workspace: RepoWorkspace, path: string) => void
   onSettings: (patch: Partial<Settings>) => Promise<void>
 }
 
@@ -73,6 +85,7 @@ export function RepoHome({
   onAddToWorkspace,
   onDeleteWorkspace,
   onEditWorkspace,
+  onRemoveFromWorkspace,
   onSettings
 }: Props) {
   const [sel, setSel] = useState(recent[0]?.path)
@@ -97,6 +110,31 @@ export function RepoHome({
   const [defaultLauncher, setDefaultLauncher] = useState('cursor')
   const pinned = settings?.pinned ?? []
   const sort = settings?.repoSort ?? 'opened'
+  // Kept locally so folding feels instant; saved to settings in the background.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(settings?.homeCollapsed ?? []))
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(settings?.homeExpanded ?? []))
+  const [dropOn, setDropOn] = useState<string | null>(null)
+  const [rail, setRailState] = useState(!!settings?.homeRail)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const wantSearch = useRef(false)
+  const settingsReady = !!settings
+  useEffect(() => {
+    if (!settings) return
+    setCollapsed(new Set(settings.homeCollapsed ?? []))
+    setExpanded(new Set(settings.homeExpanded ?? []))
+    setRailState(!!settings.homeRail)
+  }, [settingsReady])
+
+  useEffect(() => {
+    if (rail || !wantSearch.current) return
+    wantSearch.current = false
+    searchRef.current?.focus()
+  }, [rail])
+
+  function setRail(on: boolean) {
+    setRailState(on)
+    void onSettings({ homeRail: on })
+  }
 
   useEffect(() => {
     void window.spoon.app.launchers().then((result: { launchers: LauncherInfo[]; defaultId: string }) => {
@@ -124,6 +162,72 @@ export function RepoHome({
 
   const current = recent.find((r) => r.path === sel)
   const overview = sel ? overviews[sel] : undefined
+
+  const searching = !!q.trim()
+  // A filter shows its matches even inside folded sections.
+  const sectionOpen = (key: SectionKey) => searching || !collapsed.has(key)
+  const byPath = useMemo(() => new Map(recent.map((r) => [r.path.toLowerCase(), r])), [recent])
+  const pinnedRows = filtered.filter((r) => pinned.includes(r.path))
+  const otherRows = filtered.filter((r) => !pinned.includes(r.path))
+  // What the user can actually see, in screen order: drives Shift ranges and arrow keys.
+  // The icon rail ignores folds and lists every match.
+  const visible = rail ? filtered : [...(sectionOpen('pinned') ? pinnedRows : []), ...(sectionOpen('repos') ? otherRows : [])]
+
+  const shownWorkspaces = useMemo(() => {
+    const query = q.trim().toLowerCase()
+    if (!query) return workspaces.map((workspace) => ({ workspace, hit: false }))
+    return workspaces.flatMap((workspace) => {
+      const hit = workspace.repos.some((path) => path.toLowerCase().includes(query))
+      return hit || workspace.name.toLowerCase().includes(query) ? [{ workspace, hit }] : []
+    })
+  }, [workspaces, q])
+
+  function toggleSection(key: SectionKey) {
+    const next = new Set(collapsed)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    setCollapsed(next)
+    void onSettings({ homeCollapsed: [...next] })
+  }
+
+  function setAllSections(open: boolean) {
+    const next = new Set(open ? [] : SECTIONS)
+    setCollapsed(next)
+    void onSettings({ homeCollapsed: [...next] })
+  }
+
+  function setWorkspacesExpanded(ids: string[], open: boolean) {
+    const next = new Set(expanded)
+    for (const id of ids) {
+      if (open) next.add(id)
+      else next.delete(id)
+    }
+    setExpanded(next)
+    void onSettings({ homeExpanded: [...next] })
+  }
+
+  function openSectionMenu(key: SectionKey) {
+    const items: object[] = [
+      { id: 'toggle', label: collapsed.has(key) ? 'Expand' : 'Collapse' },
+      { type: 'separator' },
+      { id: 'expand-all', label: 'Expand all sections' },
+      { id: 'collapse-all', label: 'Collapse all sections' }
+    ]
+    if (key === 'workspaces') {
+      items.push(
+        { type: 'separator' },
+        { id: 'ws-open', label: 'Show repositories of every workspace' },
+        { id: 'ws-close', label: 'Hide repositories of every workspace' }
+      )
+    }
+    openMenu(items, (id) => {
+      if (id === 'toggle') toggleSection(key)
+      if (id === 'expand-all') setAllSections(true)
+      if (id === 'collapse-all') setAllSections(false)
+      if (id === 'ws-open') setWorkspacesExpanded(workspaces.map((w) => w.id), true)
+      if (id === 'ws-close') setWorkspacesExpanded(workspaces.map((w) => w.id), false)
+    })
+  }
 
   useEffect(() => {
     if (!recent.some((repo) => repo.path === sel)) setSel(recent[0]?.path)
@@ -406,14 +510,110 @@ export function RepoHome({
     if (paths.includes(sel ?? '')) setSel(next[0]?.path)
   }
 
-  function clickRepo(event: MouseEvent, path: string) {
-    const index = filtered.findIndex((r) => r.path === path)
+  function openMemberMenu(workspace: RepoWorkspace, path: string) {
+    const repo = byPath.get(path.toLowerCase())
+    if (repo) {
+      setSel(repo.path)
+      setPicked([])
+      setAnchor(repo.path)
+    }
+    const openItems = openWithMenuItems(launchers, { defaultId: defaultLauncher })
+    openMenu(
+      [
+        { id: 'open', label: 'Open in Spoon' },
+        { label: 'Open with', submenu: openItems.length ? openItems : [{ label: 'No launchers found', enabled: false }] },
+        { type: 'separator' },
+        { id: 'remove', label: `Remove from ${workspace.name}` }
+      ],
+      (id) => {
+        if (id === 'open') onOpen(repo?.path ?? path, repo?.name)
+        if (id.startsWith('open:')) void window.spoon.app.openWith(path, id.slice(5))
+        if (id === 'remove') onRemoveFromWorkspace(workspace, path)
+      }
+    )
+  }
+
+  function focusRow(path: string) {
+    // The target row is already rendered (it is in `visible`), so focus it right away.
+    const rows = document.querySelectorAll<HTMLElement>('.home-side [data-path]')
+    for (const row of rows) {
+      if (row.dataset.path !== path) continue
+      row.focus()
+      row.scrollIntoView({ block: 'nearest' })
+      return
+    }
+  }
+
+  function stepRepo(event: ReactKeyboardEvent, path: string) {
+    const index = visible.findIndex((r) => r.path === path)
+    if (index < 0) return
+    const last = visible.length - 1
+    const to =
+      event.key === 'ArrowDown' ? Math.min(index + 1, last)
+      : event.key === 'ArrowUp' ? Math.max(index - 1, 0)
+      : event.key === 'Home' ? 0
+      : last
+    const next = visible[to].path
+    event.preventDefault()
     if (event.shiftKey) {
-      const fromPath = anchor ?? sel ?? filtered[0]?.path
-      const from = filtered.findIndex((r) => r.path === fromPath)
+      const from = visible.findIndex((r) => r.path === (anchor ?? path))
+      const [a, b] = from < to ? [from, to] : [to, from]
+      setPicked(visible.slice(Math.max(a, 0), b + 1).map((r) => r.path))
+      setSel(next)
+    } else {
+      setSel(next)
+      setPicked([])
+      setAnchor(next)
+    }
+    focusRow(next)
+  }
+
+  function startDrag(event: DragEvent, path: string) {
+    const paths = targetPaths(path)
+    event.dataTransfer.setData(DRAG_REPOS, JSON.stringify(paths))
+    event.dataTransfer.setData('text/plain', paths.join('\n'))
+    event.dataTransfer.effectAllowed = 'copy'
+    if (paths.length > 1) {
+      // The browser ghost would only show the grabbed row; label the whole selection instead.
+      const ghost = document.createElement('div')
+      ghost.className = 'home-drag-ghost'
+      ghost.textContent = `${paths.length} repositories`
+      document.body.appendChild(ghost)
+      event.dataTransfer.setDragImage(ghost, 12, 12)
+      window.setTimeout(() => ghost.remove())
+    }
+  }
+
+  function dragOverWorkspace(event: DragEvent, id: string) {
+    if (!event.dataTransfer.types.includes(DRAG_REPOS)) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+    if (dropOn !== id) setDropOn(id)
+  }
+
+  function dropOnWorkspace(event: DragEvent, workspace: RepoWorkspace) {
+    event.preventDefault()
+    setDropOn(null)
+    let paths: string[] = []
+    try {
+      paths = JSON.parse(event.dataTransfer.getData(DRAG_REPOS)) as string[]
+    } catch {
+      return
+    }
+    const fresh = paths.filter((path) => !workspace.repos.some((item) => item.toLowerCase() === path.toLowerCase()))
+    if (!fresh.length) return
+    onAddToWorkspace(workspace, fresh)
+    setScan(`Added ${fresh.length} repositor${fresh.length === 1 ? 'y' : 'ies'} to ${workspace.name}.`)
+  }
+
+  function clickRepo(event: MouseEvent, path: string) {
+    const index = visible.findIndex((r) => r.path === path)
+    if (event.shiftKey) {
+      const fromPath = anchor ?? sel ?? visible[0]?.path
+      const from = visible.findIndex((r) => r.path === fromPath)
       if (from >= 0 && index >= 0) {
         const [a, b] = from < index ? [from, index] : [index, from]
-        setPicked(filtered.slice(a, b + 1).map((r) => r.path))
+        setPicked(visible.slice(a, b + 1).map((r) => r.path))
       } else {
         setPicked([path])
       }
@@ -492,13 +692,146 @@ export function RepoHome({
   const attention = counts.broken
   const selectedPinned = current ? pinned.includes(current.path) : false
 
+  function rowKeys(event: ReactKeyboardEvent, path: string) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      setSel(path)
+      setPicked([])
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) stepRepo(event, path)
+  }
+
+  function workspaceDrop(workspace: RepoWorkspace) {
+    return {
+      onDragOver: (event: DragEvent) => dragOverWorkspace(event, workspace.id),
+      onDragLeave: (event: DragEvent) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropOn(null)
+      },
+      onDrop: (event: DragEvent) => dropOnWorkspace(event, workspace)
+    }
+  }
+
+  function renderRailRepo(r: RepoSummary) {
+    const o = overviews[r.path]
+    const checking = analyzing.has(r.path)
+    const tone = dotTone(o)
+    return (
+      <div
+        key={r.path}
+        data-path={r.path}
+        className={`rail-repo${sel === r.path ? ' active' : ''}${picked.includes(r.path) ? ' picked' : ''}${checking ? ' working' : ''}`}
+        style={{ background: avatarColor(r.path) }}
+        title={`${r.name}\n${checking ? 'Analyzing...' : dotTitle(o, pinned.includes(r.path))}`}
+        aria-label={r.name}
+        aria-current={sel === r.path || undefined}
+        role="button"
+        tabIndex={0}
+        draggable
+        onKeyDown={(event) => rowKeys(event, r.path)}
+        onClick={(e) => clickRepo(e, r.path)}
+        onDoubleClick={() => onOpen(r.path, r.name)}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          openRepoMenu(r.path)
+        }}
+        onDragStart={(event) => startDrag(event, r.path)}
+        onDragEnd={() => setDropOn(null)}
+      >
+        {initials(r.name.replace(/[-_.]+/g, ' '))}
+        {(checking || (tone && tone !== 'ok')) && <span className={`rail-badge ${checking ? 'working' : tone}`} aria-hidden />}
+      </div>
+    )
+  }
+
+  function renderRepoRow(r: RepoSummary) {
+    const o = overviews[r.path]
+    const on = picked.includes(r.path)
+    const checking = analyzing.has(r.path)
+    const isPinned = pinned.includes(r.path)
+    return (
+      <div
+        key={r.path}
+        data-path={r.path}
+        className={`side-item repo-row ${sel === r.path ? 'active' : ''} ${on ? 'picked' : ''} ${checking ? 'working' : ''}`}
+        title={r.path}
+        role="button"
+        tabIndex={0}
+        draggable
+        aria-current={sel === r.path || undefined}
+        onKeyDown={(event) => rowKeys(event, r.path)}
+        onClick={(e) => clickRepo(e, r.path)}
+        onDoubleClick={() => onOpen(r.path, r.name)}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          openRepoMenu(r.path)
+        }}
+        onDragStart={(event) => startDrag(event, r.path)}
+        onDragEnd={() => setDropOn(null)}
+      >
+        <span className="dot-wrap" title={checking ? 'Analyzing...' : dotTitle(o, isPinned)}>
+          <span className={`dot ${dotTone(o)}`} />
+        </span>
+        <span className="label">{r.name}</span>
+        {isPinned && <IcoPin filled />}
+        <RepoMetrics overview={o} analyzing={checking} />
+      </div>
+    )
+  }
+
   return (
     <div className="manager home">
+      {rail ? (
+      <aside className="mgr-side home-side home-rail" style={{ width: RAIL_WIDTH }} aria-label="Repositories">
+        <div className="rail-top">
+          <Button variant="icon" className="rail-btn" aria-label="Expand sidebar" title="Expand sidebar (or double-click the edge)" onClick={() => setRail(false)}>
+            <PanelLeftOpen size={16} />
+          </Button>
+          <Button
+            variant="icon"
+            className={`rail-btn${q.trim() || statusFilter !== 'all' ? ' on' : ''}`}
+            aria-label="Filter repositories"
+            title={q.trim() ? `Filtering by “${q.trim()}”` : 'Filter repositories'}
+            onClick={() => {
+              wantSearch.current = true
+              setRail(false)
+            }}
+          >
+            <Search size={15} />
+          </Button>
+        </div>
+        <div className="home-side-scroll rail-scroll">
+          {workspaces.map((workspace) => (
+            <div
+              key={workspace.id}
+              className={`rail-ws${dropOn === workspace.id ? ' drop' : ''}`}
+              style={{ background: workspace.color }}
+              role="button"
+              tabIndex={0}
+              aria-label={`Open workspace ${workspace.name}`}
+              title={`${workspace.name} · ${workspace.repos.length} repositor${workspace.repos.length === 1 ? 'y' : 'ies'}\nDrop repositories here to add them`}
+              onClick={() => onOpenWorkspace(workspace)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') onOpenWorkspace(workspace)
+              }}
+              {...workspaceDrop(workspace)}
+            >
+              {initials(workspace.name)}
+            </div>
+          ))}
+          {workspaces.length > 0 && filtered.length > 0 && <hr className="rail-sep" />}
+          {pinnedRows.map(renderRailRepo)}
+          {pinnedRows.length > 0 && otherRows.length > 0 && <hr className="rail-sep" />}
+          {otherRows.map(renderRailRepo)}
+        </div>
+      </aside>
+      ) : (
       <aside className="mgr-side home-side" style={{ width }} aria-label="Repositories">
         <div className="side-filter">
+          <div className="side-filter-row">
           <label className="home-search">
             <Search size={14} aria-hidden />
             <input
+              ref={searchRef}
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Filter repositories"
@@ -510,27 +843,54 @@ export function RepoHome({
               </Button>
             )}
           </label>
+          <Button variant="icon" className="home-collapse" aria-label="Collapse sidebar" title="Collapse sidebar (or double-click the edge)" onClick={() => setRail(true)}>
+            <PanelLeftClose size={15} />
+          </Button>
+          </div>
           <SortMenu value={sort} onChange={(next) => void onSettings({ repoSort: next })} />
         </div>
         <div className="home-side-scroll">
-          {workspaces.length > 0 && (
-            <section className="home-side-group" aria-label="Workspaces">
-              <div className="side-sec">
-                <span>Workspaces</span>
-                <span className="counter">{workspaces.length}</span>
-              </div>
-              {workspaces.map((workspace) => (
+          {shownWorkspaces.length > 0 && (
+            <SideSection
+              id="workspaces"
+              title="Workspaces"
+              count={shownWorkspaces.length}
+              open={sectionOpen('workspaces')}
+              onToggle={() => toggleSection('workspaces')}
+              onMenu={() => openSectionMenu('workspaces')}
+            >
+              {shownWorkspaces.map(({ workspace, hit }) => {
+                const unfolded = expanded.has(workspace.id) || hit
+                return (
+                <div key={workspace.id} className={`ws-block${unfolded ? ' open' : ''}`}>
                 <div
-                  key={workspace.id}
-                  className="side-item workspace-row"
+                  className={`side-item workspace-row${dropOn === workspace.id ? ' drop' : ''}`}
                   role="button"
                   tabIndex={0}
-                  title={workspace.repos.join('\n')}
+                  aria-expanded={unfolded}
+                  title={`${workspace.repos.join('\n')}\n\nDrop repositories here to add them`}
                   onClick={() => onOpenWorkspace(workspace)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') onOpenWorkspace(workspace)
+                    if (event.key === 'ArrowRight' && !unfolded) setWorkspacesExpanded([workspace.id], true)
+                    if (event.key === 'ArrowLeft' && unfolded) setWorkspacesExpanded([workspace.id], false)
                   }}
+                  {...workspaceDrop(workspace)}
                 >
+                  <Button
+                    variant="tab-hit"
+                    className="ws-fold"
+                    aria-label={`${unfolded ? 'Hide' : 'Show'} repositories in ${workspace.name}`}
+                    title={unfolded ? 'Hide repositories' : 'Show repositories'}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      setWorkspacesExpanded([workspace.id], !unfolded)
+                    }}
+                  >
+                    <span className={`fold-chev${unfolded ? ' open' : ''}`} aria-hidden>
+                      <IcoChevron />
+                    </span>
+                  </Button>
                   <span className="ws-dot" style={{ background: workspace.color }} />
                   <span className="label">{workspace.name}</span>
                   <span className="counter">{workspace.repos.length}</span>
@@ -564,79 +924,124 @@ export function RepoHome({
                     </Button>
                   </span>
                 </div>
-              ))}
-            </section>
-          )}
-          <section className="home-side-group" aria-label="Repository list">
-            <div className="side-sec">
-              <span>Repositories</span>
-              <span className="counter">{filtered.length}</span>
-              <span className="side-sec-tools">
-                {picked.length > 0 ? (
-                  <Button variant="link" title="Clear selection" onClick={() => setPicked([])}>
-                    Clear ({picked.length})
-                  </Button>
-                ) : (
-                  <Button variant="link" title="Select all visible" onClick={() => setPicked(filtered.map((r) => r.path))}>
-                    Select all
-                  </Button>
+                {unfolded && (
+                  <div className="ws-members" role="group" aria-label={`Repositories in ${workspace.name}`}>
+                    {workspace.repos.map((path) => {
+                      const repo = byPath.get(path.toLowerCase())
+                      const o = repo ? overviews[repo.path] : undefined
+                      const checking = repo ? analyzing.has(repo.path) : false
+                      const name = repo?.name ?? path.split(/[\\/]/).filter(Boolean).pop() ?? path
+                      return (
+                        <div
+                          key={path}
+                          className={`side-item ws-member${repo && sel === repo.path ? ' active' : ''}${repo ? '' : ' missing'}${checking ? ' working' : ''}`}
+                          title={repo ? path : `${path}\nNot in the repository list`}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => {
+                            if (!repo) return
+                            setSel(repo.path)
+                            setPicked([])
+                            setAnchor(repo.path)
+                          }}
+                          onDoubleClick={() => onOpen(repo?.path ?? path, name)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') onOpen(repo?.path ?? path, name)
+                          }}
+                          onContextMenu={(event) => {
+                            event.preventDefault()
+                            openMemberMenu(workspace, path)
+                          }}
+                        >
+                          <span className="dot-wrap">
+                            <span className={`dot ${dotTone(o)}`} />
+                          </span>
+                          <span className="label">{name}</span>
+                          {repo && <RepoMetrics overview={o} analyzing={checking} />}
+                        </div>
+                      )
+                    })}
+                  </div>
                 )}
-              </span>
-            </div>
-            {filtered.map((r) => {
-              const o = overviews[r.path]
-              const on = picked.includes(r.path)
-              const checking = analyzing.has(r.path)
-              const isPinned = pinned.includes(r.path)
-              return (
-                <div
-                  key={r.path}
-                  className={`side-item repo-row ${sel === r.path ? 'active' : ''} ${on ? 'picked' : ''} ${checking ? 'working' : ''}`}
-                  title={r.path}
-                  role="button"
-                  tabIndex={0}
-                  aria-current={sel === r.path || undefined}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      setSel(r.path)
-                      setPicked([])
-                    }
-                  }}
-                  onClick={(e) => clickRepo(e, r.path)}
-                  onDoubleClick={() => onOpen(r.path, r.name)}
-                  onContextMenu={(event) => {
-                    event.preventDefault()
-                    openRepoMenu(r.path)
-                  }}
-                >
-                  <span className="dot-wrap" title={checking ? 'Analyzing...' : dotTitle(o, isPinned)}>
-                    <span className={`dot ${dotTone(o)}`} />
-                  </span>
-                  <span className="label">{r.name}</span>
-                  {isPinned && <IcoPin filled />}
-                  <RepoMetrics overview={o} analyzing={checking} />
                 </div>
+                )
+              })}
+            </SideSection>
+          )}
+          {pinnedRows.length > 0 && (
+            <SideSection
+              id="pinned"
+              title="Pinned"
+              count={pinnedRows.length}
+              open={sectionOpen('pinned')}
+              summary={<SectionPulse rows={pinnedRows} overviews={overviews} />}
+              onToggle={() => toggleSection('pinned')}
+              onMenu={() => openSectionMenu('pinned')}
+            >
+              {pinnedRows.map(renderRepoRow)}
+            </SideSection>
+          )}
+          <SideSection
+            id="repos"
+            title="Repositories"
+            label="Repository list"
+            count={otherRows.length}
+            open={sectionOpen('repos')}
+            summary={<SectionPulse rows={otherRows} overviews={overviews} />}
+            onToggle={() => toggleSection('repos')}
+            onMenu={() => openSectionMenu('repos')}
+            tools={
+              picked.length > 0 ? (
+                <Button variant="link" title="Clear selection" onClick={() => setPicked([])}>
+                  Clear ({picked.length})
+                </Button>
+              ) : (
+                <Button variant="link" title="Select all visible" onClick={() => setPicked(filtered.map((r) => r.path))}>
+                  Select all
+                </Button>
               )
-            })}
+            }
+          >
+            {otherRows.map(renderRepoRow)}
             {!filtered.length && (
               <div className="home-side-empty">
                 {recent.length ? emptyFilterLabel(statusFilter, !!q.trim()) : 'No repositories yet'}
               </div>
             )}
-          </section>
+          </SideSection>
         </div>
       </aside>
+      )}
       <div
         className="splitbar x"
-        onPointerDown={(e) =>
+        title={rail ? 'Double-click or drag to expand' : 'Drag to resize · double-click or drag narrower to collapse'}
+        onDoubleClick={() => setRail(!rail)}
+        onPointerDown={(e) => {
+          // Moving the edge only counts as a resize once the pointer travels, so a double-click never saves a width.
+          let moved = false
+          let opened = false
+          const startWidth = width
           bindDrag(
             e,
             'x',
-            (x) => onResize(clamp(x, 200, 480)),
-            (x) => onResizeEnd(clamp(x, 200, 480))
+            (x) => {
+              moved = true
+              if (rail && !opened && x >= RAIL_OPEN_AT) {
+                opened = true
+                setRail(false)
+              }
+              if (!rail || opened) onResize(clamp(x, 200, 480))
+            },
+            (x) => {
+              if (!moved) return
+              if (!rail && x < RAIL_CLOSE_AT) {
+                onResize(startWidth)
+                setRail(true)
+              }
+              else if (!rail || opened) onResizeEnd(clamp(x, 200, 480))
+            }
           )
-        }
+        }}
       />
       <main className="mgr-main home-main">
         <div className="home-inner">
@@ -867,6 +1272,82 @@ function SyncBtn({
       {children}
       <span>{label}</span>
     </Button>
+  )
+}
+
+function SideSection({
+  id,
+  title,
+  label,
+  count,
+  open,
+  summary,
+  tools,
+  onToggle,
+  onMenu,
+  children
+}: {
+  id: SectionKey
+  title: string
+  label?: string
+  count: number
+  open: boolean
+  summary?: ReactNode
+  tools?: ReactNode
+  onToggle: () => void
+  onMenu: () => void
+  children: ReactNode
+}) {
+  return (
+    <section className={`home-side-group${open ? '' : ' folded'}`} aria-label={label ?? title}>
+      <div
+        className="side-sec"
+        onContextMenu={(event) => {
+          event.preventDefault()
+          onMenu()
+        }}
+      >
+        <Button
+          variant="tab-hit"
+          className="side-sec-toggle"
+          aria-expanded={open}
+          aria-controls={`home-sec-${id}`}
+          title={`${open ? 'Collapse' : 'Expand'} ${title.toLowerCase()} · right-click for more`}
+          onClick={onToggle}
+        >
+          <span className={`fold-chev${open ? ' open' : ''}`} aria-hidden>
+            <IcoChevron />
+          </span>
+          <span>{title}</span>
+          <span className="counter">{count}</span>
+        </Button>
+        {open ? tools && <span className="side-sec-tools">{tools}</span> : summary}
+      </div>
+      {/* Grid rows animate between 0fr and 1fr, so folding slides instead of jumping. */}
+      <div id={`home-sec-${id}`} className="side-sec-body" inert={!open}>
+        <div className="side-sec-inner">{children}</div>
+      </div>
+    </section>
+  )
+}
+
+/** Tiny status digest shown on a folded section, so nothing important hides behind the fold. */
+function SectionPulse({ rows, overviews }: { rows: RepoSummary[]; overviews: Record<string, RepoOverview> }) {
+  const sum = summarize(overviews, rows)
+  const items: { key: string; text: string; cls: string; title: string }[] = []
+  if (sum.broken) items.push({ key: 'x', text: `!${sum.broken}`, cls: 'err', title: `${sum.broken} need attention` })
+  if (sum.dirty) items.push({ key: 'd', text: `●${sum.dirty}`, cls: 'warn', title: `${sum.dirty} with uncommitted changes` })
+  if (sum.behind) items.push({ key: 'b', text: `↓${sum.behind}`, cls: 'info', title: `${sum.behind} behind their remote` })
+  if (sum.ahead) items.push({ key: 'a', text: `↑${sum.ahead}`, cls: 'info', title: `${sum.ahead} with commits to push` })
+  if (!items.length) return null
+  return (
+    <span className="metrics sec-pulse">
+      {items.map((item) => (
+        <span key={item.key} className={`metric ${item.cls}`} title={item.title}>
+          {item.text}
+        </span>
+      ))}
+    </span>
   )
 }
 

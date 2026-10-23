@@ -1115,6 +1115,11 @@ export function App() {
             onAddToWorkspace={(workspace, paths) => void addReposToWorkspace(workspace, paths)}
             onDeleteWorkspace={(id) => void removeWorkspace(id)}
             onEditWorkspace={setEditingWorkspace}
+            onRemoveFromWorkspace={(workspace, path) =>
+              void updateWorkspace(workspace, {
+                repos: workspace.repos.filter((item) => item.toLowerCase() !== path.toLowerCase())
+              }).catch(() => undefined)
+            }
             onSettings={async (patch) => {
               const s = await window.spoon.app.patchSettings(patch)
               setSettings(s)

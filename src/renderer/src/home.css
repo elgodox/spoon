@@ -109,6 +109,175 @@ html[data-theme='dark'] .manager.home {
 }
 .manager.home .side-sec-tools { margin-inline-start: auto; text-transform: none; letter-spacing: 0; }
 
+/* Foldable sections */
+.manager.home .side-sec-toggle.spoon-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  margin-inline-start: -4px;
+  padding: 0 6px 0 4px;
+  border-radius: 6px;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+.manager.home .side-sec-toggle.spoon-button:hover { color: var(--text); background: color-mix(in srgb, var(--sel) 70%, transparent); }
+.manager.home .fold-chev {
+  display: inline-grid;
+  place-items: center;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  opacity: .65;
+  /* ChevronLeft turned to point right (folded) or down (open). */
+  transform: rotate(180deg);
+  transition: transform 160ms ease;
+}
+.manager.home .fold-chev svg { width: 12px; height: 12px; }
+.manager.home .fold-chev.open { transform: rotate(270deg); }
+.manager.home .sec-pulse { margin-inline-start: auto; padding-inline-end: 2px; font-size: 10.5px; animation: home-fade-in 160ms ease; }
+.manager.home .side-sec-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition: grid-template-rows 180ms ease, opacity 160ms ease;
+}
+.manager.home .side-sec-inner { min-height: 0; overflow: hidden; }
+.manager.home .home-side-group.folded .side-sec-body { grid-template-rows: 0fr; opacity: 0; }
+@keyframes home-fade-in { from { opacity: 0; transform: translateX(-3px); } to { opacity: 1; transform: none; } }
+
+/* Workspaces unfold into their repositories and accept dropped repository rows. */
+.manager.home .ws-fold.spoon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  margin-inline: -4px -2px;
+  padding: 0;
+  border-radius: 4px;
+  color: var(--muted);
+}
+.manager.home .ws-fold.spoon-button:hover { color: var(--text); background: color-mix(in srgb, var(--text) 8%, transparent); }
+.manager.home .workspace-row.drop {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.manager.home .ws-members {
+  position: relative;
+  margin: 0 0 4px 17px;
+  padding-inline-start: 8px;
+  animation: home-unfold 160ms ease;
+}
+.manager.home .ws-members::before {
+  content: '';
+  position: absolute;
+  inset-block: 2px;
+  inset-inline-start: 0;
+  width: 1px;
+  background: var(--h-border-soft);
+}
+.manager.home .ws-member { min-height: 26px; gap: 7px; }
+.manager.home .ws-member .label { font-size: 12px; color: color-mix(in srgb, var(--text) 85%, var(--muted)); }
+.manager.home .ws-member.active { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.manager.home .ws-member.active::before { display: none; }
+.manager.home .ws-member.missing .label { color: var(--muted); font-style: italic; }
+.manager.home .ws-member .dot { width: 6px; height: 6px; }
+.manager.home .ws-member.working .dot { animation: dot-pulse 1.2s ease-in-out infinite; }
+@keyframes home-unfold { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+.manager.home .repo-row[draggable='true']:active { cursor: grabbing; }
+.home-drag-ghost {
+  position: fixed;
+  top: -100px;
+  left: -100px;
+  padding: 4px 10px;
+  border-radius: 99px;
+  background: var(--accent);
+  color: #fff;
+  font: 600 12px/1.4 system-ui, sans-serif;
+}
+
+.manager.home .side-filter-row { display: flex; align-items: center; gap: 6px; }
+.manager.home .side-filter-row .home-search { flex: 1; min-width: 0; }
+
+/* Icon rail: the sidebar folded down to workspace and repository badges. */
+body:not(.resizing) .manager.home .home-side { transition: width 160ms ease; }
+.manager.home .home-side > * { animation: home-fade-in 180ms ease; }
+.manager.home .rail-top {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 12px 0 8px;
+  border-bottom: 1px solid var(--h-border-soft);
+}
+.manager.home .rail-scroll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0 16px;
+  scrollbar-width: none;
+}
+.manager.home :is(.rail-ws, .rail-repo) {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  text-shadow: 0 1px 1px #0000003d;
+  cursor: pointer;
+  user-select: none;
+  transition: border-radius 160ms ease, transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+}
+.manager.home .rail-ws { border-radius: 8px; box-shadow: inset 0 0 0 1px #00000026; }
+.manager.home .rail-repo { border-radius: 50%; }
+.manager.home :is(.rail-ws, .rail-repo):hover { transform: translateY(-1px); filter: brightness(1.08); }
+.manager.home .rail-repo:is(:hover, .active, .picked) { border-radius: 10px; }
+.manager.home .rail-repo.active { box-shadow: 0 0 0 2px var(--sidebar), 0 0 0 4px var(--accent); }
+.manager.home .rail-repo.picked { box-shadow: 0 0 0 2px var(--sidebar), 0 0 0 4px color-mix(in srgb, var(--accent) 55%, transparent); }
+.manager.home .rail-repo.active::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: -12px;
+  width: 4px;
+  height: 18px;
+  border-radius: 0 4px 4px 0;
+  background: var(--accent);
+}
+.manager.home .rail-ws.drop { transform: scale(1.1); box-shadow: 0 0 0 2px var(--sidebar), 0 0 0 4px var(--accent); }
+.manager.home :is(.rail-ws, .rail-repo):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.manager.home .rail-badge {
+  position: absolute;
+  inset-inline-end: -3px;
+  inset-block-end: -3px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--sidebar);
+  border-radius: 50%;
+  background: var(--muted);
+}
+.manager.home .rail-badge.warn { background: var(--h-warn); }
+.manager.home .rail-badge.info { background: var(--h-info); }
+.manager.home .rail-badge.err { background: var(--h-err); }
+.manager.home .rail-badge.working { background: var(--accent); animation: dot-pulse 1.2s ease-in-out infinite; }
+.manager.home .rail-sep { width: 22px; height: 1px; flex: 0 0 auto; margin: 2px 0; border: 0; background: var(--h-border); }
+
+@media (prefers-reduced-motion: reduce) {
+  .manager.home :is(.side-sec-body, .fold-chev) { transition: none; }
+  .manager.home :is(.ws-members, .sec-pulse, .home-side > *) { animation: none; }
+  body .manager.home .home-side { transition: none; }
+}
+
 .manager.home .side-item {
   position: relative;
   display: flex;
@@ -899,4 +1068,6 @@ html[data-theme='dark'] .manager.home {
   .manager.home .side-sec-tools .spoon-button[data-button-variant='link'] { min-height: 20px; padding: 0 4px; font-size: 12px; font-weight: 600; }
   .manager.home .side-filter .menu-select-btn { height: 32px; min-height: 32px; border-radius: 8px; background: var(--bg); font-size: 12px; }
   .manager.home .picked-list .spoon-button[data-button-variant='link'] { color: var(--text); font-weight: 600; padding: 0; min-height: 0; }
+  .manager.home :is(.rail-btn, .home-collapse).spoon-button[data-button-variant='icon'] { width: 32px; height: 32px; min-width: 32px; min-height: 32px; border-radius: 8px; }
+  .manager.home .rail-btn.on.spoon-button { color: var(--accent); }
 }
