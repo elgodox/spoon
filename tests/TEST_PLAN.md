@@ -142,7 +142,8 @@ Legend: U = unit test, E = end-to-end test.
 |---|---|
 | Appearance: packs, light/dark, SpaceX stays dark, icons, accents | E `app`, U `shared` |
 | Git settings: auto fetch, interval, auto update | E `app` |
-| Open with: detection, rescan, default launcher | E `app`, U `main-services` |
+| Open with: detection (registry PATH, CLI install folders, no bash shims), rescan, default launcher | E `app`, U `main-services` |
+| Open with: launching IDEs / CLIs / terminal, errors shown, button icon follows the default | E `open-with`, U `main-services` |
 | Help links, rail keyboard navigation | E `app` |
 | Tour (Next / Back / keys / Skip, saves `onboarded`) | E `app` |
 | About dialog | E `app` |

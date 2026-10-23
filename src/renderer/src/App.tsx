@@ -87,6 +87,7 @@ import {
 import { AboutDialog } from './About'
 import { Tour } from './Tour'
 import { HealthDialog, RepoHome } from './RepoHome'
+import { OpenWithIcon } from './OpenWithIcon'
 import { CommitGraph, COMMIT_ROW_HEIGHT, graphWidth } from './CommitGraph'
 import {
   bindDrag,
@@ -1001,7 +1002,7 @@ export function App() {
               })
             }}
           >
-            <IcoOpen />
+            <OpenWithIcon refreshKey={`${settings?.defaultLauncher ?? ''}:${settings?.editor ?? ''}`} />
             <span>Open with</span>
           </Button>
           <Button className="tb-btn" data-ico="health" disabled={!active.path} onClick={() => setOverlay({ type: 'health' })}>

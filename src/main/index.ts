@@ -306,8 +306,18 @@ async function bulkOne(action: BulkAction, path: string, name: string): Promise<
   return { path, name, ok: true, message: `Pushed ${o.ahead} commit(s)` }
 }
 
-async function openIn(path: string, target: 'editor' | 'terminal' | 'explorer'): Promise<string> {
-  return launchers.openInLegacy(path, target)
+/** Renderer callers fire "Open with" and forget, so a failure is shown here instead of lost. */
+async function reportOpenFailure(open: Promise<string>): Promise<string | null> {
+  try {
+    return await open
+  } catch (e) {
+    await dialog.showMessageBox(mainWindow!, { type: 'error', message: e instanceof Error ? e.message : String(e) })
+    return null
+  }
+}
+
+async function openIn(path: string, target: 'editor' | 'terminal' | 'explorer'): Promise<string | null> {
+  return reportOpenFailure(launchers.openInLegacy(path, target))
 }
 
 function scheduleFetch(): void {
@@ -528,7 +538,8 @@ function registerIpc(): void {
   }))
   ipcMain.handle('app:openIn', (_e, path: string, target: 'editor' | 'terminal' | 'explorer') => openIn(path, target))
   ipcMain.handle('app:launchers', (_e, force?: boolean) => launchers.listLaunchers(!!force))
-  ipcMain.handle('app:openWith', (_e, path: string, launcherId?: string) => launchers.openWith(path, launcherId))
+  ipcMain.handle('app:launcherIcon', (_e, launcherId?: string) => launchers.launcherIcon(launcherId))
+  ipcMain.handle('app:openWith', (_e, path: string, launcherId?: string) => reportOpenFailure(launchers.openWith(path, launcherId)))
   ipcMain.handle('app:setDefaultLauncher', (_e, id: string) => {
     const next = store.patchSettings({
       defaultLauncher: id,

@@ -17,6 +17,18 @@ export interface LauncherSpec {
 export interface LauncherInfo extends LauncherSpec {
   available: boolean
   command?: string
+  /** Full path of the file Spoon starts (`.exe`, `.cmd`, ...). */
+  path?: string
+}
+
+/** What the "Open with" button shows for the default launcher. */
+export interface LauncherIcon {
+  id: string
+  label?: string
+  kind?: LauncherKind
+  mode?: LauncherMode
+  /** The program's own icon as a data URL, or null when it only has Windows' generic one. */
+  icon: string | null
 }
 
 export const LAUNCHER_KIND_LABEL: Record<LauncherKind, string> = {
