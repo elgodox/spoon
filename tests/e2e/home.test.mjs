@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { commitAll, dialogBox, git, launch, sandbox, toolbar, writeFile } from './harness.mjs'
+import { authGitServer } from '../support/git-http.mjs'
 
 let box, ui, page
 let alpha, beta, dirty, synced, bare, teammate
@@ -206,6 +207,32 @@ test('Clone clones a repository into the parent folder and opens it', async () =
   await ui.until(() => existsSync(join(parent, 'cloned', '.git')), 'cloned')
   await page.locator('.tabs .tab.active', { hasText: 'cloned' }).waitFor()
   await toolbar(page, 'home')
+})
+
+test('Clone from a password-protected remote asks for credentials in Spoon', async () => {
+  const parent = join(box.dir, 'auth-clones')
+  mkdirSync(parent)
+  const { url, server, attempts } = await authGitServer(join(bare, '..'), 'alan', 'tok3n')
+  try {
+    await page.getByRole('button', { name: 'Clone', exact: true }).first().click()
+    const dialog = dialogBox(page, 'Clone')
+    const inputs = dialog.locator('input')
+    await inputs.nth(0).fill(`${url}/${bare.split(/[\\/]/).pop()}`)
+    await inputs.nth(1).fill(parent)
+    await inputs.nth(2).fill('private')
+    await dialog.getByRole('button', { name: 'Clone', exact: true }).click()
+    const signIn = dialogBox(page, 'Sign in')
+    await signIn.getByText(url).waitFor()
+    await signIn.locator('input').nth(0).fill('alan')
+    await signIn.locator('input[type="password"]').fill('tok3n')
+    await signIn.getByRole('button', { name: 'Sign in', exact: true }).click()
+    await ui.until(() => existsSync(join(parent, 'private', 'README.md')), 'cloned with credentials')
+    assert.ok(attempts.includes('alan:tok3n'))
+    await page.locator('.tabs .tab.active', { hasText: 'private' }).waitFor()
+    await toolbar(page, 'home')
+  } finally {
+    server.close()
+  }
 })
 
 test('Clone with a bad URL tells the user what went wrong', async () => {

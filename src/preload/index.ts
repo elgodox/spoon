@@ -153,6 +153,8 @@ const api = {
     update: () => ipcRenderer.invoke('app:update'),
     checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
     installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
+    answerCredential: (id: string, answer: { value: string; password?: string } | null) =>
+      ipcRenderer.invoke('credential:answer', id, answer),
     on: (channel: string, fn: (...args: unknown[]) => void) => {
       const listener = (_e: unknown, ...args: unknown[]) => fn(...args)
       ipcRenderer.on(channel, listener)

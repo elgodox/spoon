@@ -20,6 +20,8 @@ import type {
   BulkAction,
   BulkResult,
   CommitOptions,
+  CredentialAnswer,
+  CredentialRequest,
   FetchOptions,
   PullOptions,
   PushOptions,
@@ -36,6 +38,7 @@ import * as updater from './updater'
 import { analyzeRepository, analyzeWorkspaces, generateCommitMessage, generateStashMessage } from './ai'
 import * as launchers from './launchers'
 import * as profile from './profile'
+import { createAskpassResponder, startAskpass } from './askpass'
 import { mapIndexLine } from '../shared/change-location'
 import { listProviderModels } from './model-catalog'
 
@@ -205,6 +208,32 @@ function send(channel: string, ...args: unknown[]): void {
   mainWindow?.webContents.send(channel, ...args)
 }
 
+const credentialWaits = new Map<string, (answer: CredentialAnswer | null) => void>()
+
+/** Show Git's credential prompt in the window and wait for the user (or give up after 5 minutes). */
+function askCredential(request: CredentialRequest): Promise<CredentialAnswer | null> {
+  const win = mainWindow
+  if (!win || win.isDestroyed()) return Promise.resolve(null)
+  if (win.isMinimized()) win.restore()
+  win.focus()
+  const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return new Promise((resolvePromise) => {
+    const done = (answer: CredentialAnswer | null) => {
+      if (!credentialWaits.delete(id)) return
+      clearTimeout(timer)
+      win.webContents.off('did-finish-load', cancel)
+      win.off('closed', cancel)
+      resolvePromise(answer)
+    }
+    const cancel = () => done(null)
+    const timer = setTimeout(cancel, 5 * 60_000)
+    credentialWaits.set(id, done)
+    win.webContents.once('did-finish-load', cancel)
+    win.once('closed', cancel)
+    win.webContents.send('credential:prompt', { id, ...request })
+  })
+}
+
 function pushActivity(item: (typeof activity)[number]): void {
   activity.unshift(item)
   if (activity.length > 80) activity.pop()
@@ -256,7 +285,7 @@ async function bulkOne(action: BulkAction, path: string, name: string): Promise<
   if (action === 'fetch') {
     const remotes = await git.getRemotes(path)
     if (!remotes.length) return skip('No remote')
-    await git.fetchRemote(path, { all: true, prune: true })
+    await git.fetchRemote(path, { all: true, prune: true, background: true })
     return { path, name, ok: true, message: 'Fetched' }
   }
   const o = await git.overview(path)
@@ -842,6 +871,9 @@ function registerIpc(): void {
     watchRepo(dest)
     return dest
   })
+  ipcMain.handle('credential:answer', (_e, id: string, answer: CredentialAnswer | null) => {
+    credentialWaits.get(id)?.(answer && typeof answer.value === 'string' ? answer : null)
+  })
   ipcMain.handle('git:lfs', (_e, path: string) => git.lfsFiles(path))
   ipcMain.handle('git:worktrees', (_e, path: string) => git.worktrees(path))
 
@@ -980,6 +1012,9 @@ app.whenReady().then(async () => {
   registerIpc()
   buildMenu()
   createWindow()
+  startAskpass(join(app.getPath('userData'), 'askpass'), createAskpassResponder(askCredential))
+    .then(git.setPromptEnv)
+    .catch((e) => console.error('Credential prompts unavailable:', e))
   const gitReady = git.findGit().catch(async (e) => {
     await dialog.showMessageBox(mainWindow!, { type: 'error', message: e instanceof Error ? e.message : String(e) })
   })

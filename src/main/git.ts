@@ -63,6 +63,12 @@ export interface GitResult {
 }
 
 let gitExe = 'git'
+let promptEnv: NodeJS.ProcessEnv = {}
+
+/** Environment that lets Git ask the user for credentials (see askpass.ts). */
+export function setPromptEnv(env: NodeJS.ProcessEnv): void {
+  promptEnv = env
+}
 
 export function setGitPath(path?: string): void {
   gitExe = path && existsSync(path) ? path : 'git'
@@ -93,7 +99,7 @@ export async function findGit(): Promise<string> {
 function runGitRaw(
   cwd: string | undefined,
   args: string[],
-  opts?: { stdin?: string; git?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number }
+  opts?: { stdin?: string; git?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; prompt?: boolean }
 ): Promise<GitResult> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(opts?.git ?? gitExe, args, {
@@ -101,6 +107,7 @@ function runGitRaw(
       windowsHide: true,
       env: {
         ...process.env,
+        ...(opts?.prompt ? promptEnv : {}),
         ...opts?.env,
         GIT_OPTIONAL_LOCKS: '0',
         GIT_TERMINAL_PROMPT: '0',
@@ -145,16 +152,22 @@ function runGitRaw(
 export async function git(
   cwd: string,
   args: string[],
-  opts?: { stdin?: string; allowFail?: boolean; env?: NodeJS.ProcessEnv; timeoutMs?: number }
+  opts?: { stdin?: string; allowFail?: boolean; env?: NodeJS.ProcessEnv; timeoutMs?: number; prompt?: boolean }
 ): Promise<GitResult> {
   const r = await runGitRaw(cwd, ['-c', 'core.quotepath=false', '-c', 'i18n.logoutputencoding=utf-8', ...args], opts)
   if (r.code !== 0 && !opts?.allowFail) {
-    const msg = (r.stderr || r.stdout || `git ${args.join(' ')} failed`).trim()
+    const msg = authHint((r.stderr || r.stdout || `git ${args.join(' ')} failed`).trim())
     const err = new Error(msg)
     ;(err as Error & { result: GitResult }).result = r
     throw err
   }
   return r
+}
+
+/** Git's "terminal prompts disabled" means nobody answered the credential prompt. */
+export function authHint(message: string): string {
+  if (!/terminal prompts disabled|could not read (Username|Password)/i.test(message)) return message
+  return `${message}\n\nThe remote needs a username and password (or a personal access token). Sign in when Spoon asks, or set up Git Credential Manager.`
 }
 
 const SCAN_SKIP = new Set([
@@ -316,7 +329,7 @@ export async function cloneRepo(
   const r = await new Promise<GitResult>((resolvePromise, reject) => {
     const child = spawn(gitExe, args, {
       windowsHide: true,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+      env: { ...process.env, ...promptEnv, GIT_TERMINAL_PROMPT: '0' }
     })
     let stdout = ''
     let stderr = ''
@@ -333,7 +346,7 @@ export async function cloneRepo(
     child.on('error', reject)
     child.on('close', (code) => resolvePromise({ stdout, stderr, code: code ?? 1 }))
   })
-  if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || 'Clone failed')
+  if (r.code !== 0) throw new Error(authHint((r.stderr || r.stdout).trim() || 'Clone failed'))
   return target
 }
 
@@ -725,7 +738,7 @@ export async function getSubmodules(cwd: string): Promise<SubmoduleInfo[]> {
 export async function submoduleUpdate(cwd: string, subpath?: string): Promise<void> {
   const args = ['submodule', 'update', '--init', '--recursive']
   if (subpath) args.push('--', subpath)
-  await git(cwd, args)
+  await git(cwd, args, { prompt: true })
 }
 
 export async function stage(cwd: string, paths: string[]): Promise<void> {
@@ -775,7 +788,7 @@ export async function fetchRemote(cwd: string, opts: FetchOptions = {}): Promise
   else args.push(opts.remote)
   if (opts.prune) args.push('--prune')
   if (opts.tags) args.push('--tags')
-  return git(cwd, args)
+  return git(cwd, args, { prompt: !opts.background })
 }
 
 export async function pullRemote(cwd: string, opts: PullOptions = {}): Promise<GitResult> {
@@ -792,7 +805,7 @@ export async function pullRemote(cwd: string, opts: PullOptions = {}): Promise<G
   if (opts.rebase) args.push('--rebase')
   if (opts.prune) args.push('--prune')
   if (opts.remote) args.push(opts.remote)
-  const r = await git(cwd, args)
+  const r = await git(cwd, args, { prompt: true })
   if (stashed) await git(cwd, ['stash', 'pop'], { allowFail: true })
   return r
 }
@@ -804,7 +817,7 @@ export async function pushRemote(cwd: string, opts: PushOptions = {}): Promise<G
   if (opts.setUpstream) args.push('-u')
   if (opts.remote) args.push(opts.remote)
   if (opts.branch) args.push(opts.branch)
-  return git(cwd, args)
+  return git(cwd, args, { prompt: true })
 }
 
 export async function checkout(cwd: string, ref: string, create = false): Promise<void> {
@@ -830,7 +843,7 @@ export async function createBranch(cwd: string, name: string, checkoutBranch = t
 }
 
 export async function deleteBranch(cwd: string, name: string, force = false, remoteName?: string): Promise<void> {
-  if (remoteName) await git(cwd, ['push', remoteName, '--delete', name])
+  if (remoteName) await git(cwd, ['push', remoteName, '--delete', name], { prompt: true })
   else await git(cwd, ['branch', force ? '-D' : '-d', name])
 }
 
@@ -1736,7 +1749,7 @@ export async function applyFix(path: string, fix: RepoFixId, input?: { name?: st
     case 'publish-branch': {
       const remote = await remotes()
       if (!remote) throw new Error('No remote to publish to')
-      await git(path, ['push', '-u', remote, 'HEAD'])
+      await git(path, ['push', '-u', remote, 'HEAD'], { prompt: true })
       return `Published to ${remote}`
     }
     case 'track-upstream': {
@@ -1746,10 +1759,10 @@ export async function applyFix(path: string, fix: RepoFixId, input?: { name?: st
       return `Tracking ${remote}/${branch}`
     }
     case 'pull-ff':
-      await git(path, ['pull', '--ff-only'])
+      await git(path, ['pull', '--ff-only'], { prompt: true })
       return 'Up to date'
     case 'prune':
-      await git(path, ['fetch', '--all', '--prune'])
+      await git(path, ['fetch', '--all', '--prune'], { prompt: true })
       return 'Fetched and pruned'
     case 'gc':
       await git(path, ['gc', '--prune=now', '--quiet'])

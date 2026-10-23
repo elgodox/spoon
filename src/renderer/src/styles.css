@@ -949,6 +949,7 @@ html[data-pack='spoon'] .recent-work .recent-go {
 .dialog.wide { width: min(760px, 96vw); }
 .dialog-head { padding: 16px 20px 0; }
 .dialog-body { overflow: auto; min-height: 0; padding: 8px 20px 8px; }
+.credential-prompt { margin: 4px 0 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .dialog h2 { margin: 0 0 4px; font-size: 17px; font-weight: 650; letter-spacing: -0.02em; }
 .dialog h3 { margin: 18px 0 8px; font-size: 12px; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
 .dialog label { display: block; margin: 8px 0 4px; color: var(--muted); }
