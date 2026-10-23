@@ -18,6 +18,8 @@ import type {
   BranchInfo,
   CommitInfo,
   ConflictFile,
+  CredentialAnswer,
+  CredentialPromptEvent,
   DiffHunk,
   FileDiff,
   MediaKind,
@@ -645,7 +647,7 @@ export function App() {
         document.documentElement.dataset.maximized = on ? '1' : '0'
       }),
       window.spoon.app.on('auto-fetch', () => {
-        if (active.path) void window.spoon.git.fetch(active.path, { all: true, prune: true }).then(() => reload())
+        if (active.path) void window.spoon.git.fetch(active.path, { all: true, prune: true, background: true }).then(() => reload())
       })
     ]
     return () => offs.forEach((off) => off())
@@ -1292,6 +1294,7 @@ export function App() {
         }}
       />
       <ConfettiBurst token={confettiAt} />
+      <CredentialPrompt />
     </div>
     </AvatarProvider>
   )
@@ -3891,6 +3894,73 @@ function CloneDialog({ onClose, onOpen }: { onClose: () => void; onOpen: (p: str
           }}
         >
           {busy ? 'Cloning...' : 'Clone'}
+        </Button>
+      </div>
+    </Modal>
+  )
+}
+
+/** Git (clone, fetch, pull, push) needs a username, password, token or SSH answer. */
+function CredentialPrompt() {
+  const [queue, setQueue] = useState<CredentialPromptEvent[]>([])
+  const [value, setValue] = useState('')
+  const [password, setPassword] = useState('')
+  useEffect(() => window.spoon.app.on('credential:prompt', (req) => setQueue((q) => [...q, req as CredentialPromptEvent])), [])
+  const req = queue[0]
+  if (!req) return null
+  const answer = (a: CredentialAnswer | null) => {
+    void window.spoon.app.answerCredential(req.id, a)
+    setQueue((q) => q.slice(1))
+    setValue('')
+    setPassword('')
+  }
+  const host = req.target?.replace(/^[a-z+]+:\/\//i, '').replace(/^[^@/]*@/, '').split('/')[0] ?? ''
+  const tokenHint = /(^|\.)(github\.com|gitlab\.com|bitbucket\.org|dev\.azure\.com)$/i.test(host)
+  const ready = req.kind === 'username' ? !!value.trim() : true
+  const submit = () => {
+    if (!ready) return
+    answer(req.kind === 'username' ? { value: value.trim(), password } : { value })
+  }
+  const enter = (e: { key: string }) => e.key === 'Enter' && submit()
+  if (req.kind === 'confirm')
+    return (
+      <Modal title="Confirm connection" onClose={() => answer(null)}>
+        <pre className="hint credential-prompt">{req.prompt}</pre>
+        <div className="dialog-foot">
+          <Button className="ghost" onClick={() => answer({ value: 'no' })}>
+            No
+          </Button>
+          <Button className="primary" autoFocus onClick={() => answer({ value: 'yes' })}>
+            Yes
+          </Button>
+        </div>
+      </Modal>
+    )
+  return (
+    <Modal title={req.kind === 'username' ? 'Sign in' : req.kind === 'password' ? 'Password required' : 'Git needs an answer'} onClose={() => answer(null)}>
+      {req.kind === 'username' ? (
+        <>
+          <p>
+            <strong>{req.target}</strong> needs your credentials.
+          </p>
+          <label>Username</label>
+          <input autoFocus value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={enter} autoComplete="username" />
+          <label>{tokenHint ? 'Personal access token' : 'Password or token'}</label>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={enter} autoComplete="current-password" />
+          {tokenHint && <p className="hint">{host} no longer accepts account passwords for Git. Use a personal access token.</p>}
+        </>
+      ) : (
+        <>
+          <pre className="hint credential-prompt">{req.prompt}</pre>
+          <input autoFocus type={req.kind === 'password' ? 'password' : 'text'} value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={enter} />
+        </>
+      )}
+      <div className="dialog-foot">
+        <Button className="ghost" onClick={() => answer(null)}>
+          Cancel
+        </Button>
+        <Button className="primary" disabled={!ready} onClick={submit}>
+          {req.kind === 'username' ? 'Sign in' : 'OK'}
         </Button>
       </div>
     </Modal>
