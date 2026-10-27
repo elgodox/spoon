@@ -183,7 +183,8 @@ export async function catchErr(fn: () => Promise<void>): Promise<void> {
   try {
     await fn()
   } catch (e) {
-    await window.spoon.app.error(e instanceof Error ? e.message : String(e))
+    const message = e instanceof Error ? e.message : String(e)
+    await window.spoon.app.error(message.replace(/^Error invoking remote method '[^']+': Error: /, ''))
   }
 }
 

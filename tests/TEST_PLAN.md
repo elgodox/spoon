@@ -121,6 +121,7 @@ Legend: U = unit test, E = end-to-end test.
 | Feature | Test |
 |---|---|
 | Fetch / Pull / Push toolbar buttons with counts | E `refs` |
+| Fetch / pull on one repo never overlap (auto-fetch + bulk + toolbar); a FETCH_HEAD held by another program is retried, then explained | U `git-refs` |
 | Push sets the upstream for new branches; push with no remote errors | E `refs` |
 | Pull with rebase, force-with-lease, prune, tags | U `git-refs` |
 | Pull with auto-stash (API) | U `git-refs` |

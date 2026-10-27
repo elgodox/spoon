@@ -275,6 +275,26 @@ test('fetch / pull / push against a bare remote, with ahead/behind tracking', as
   assert.ok(!(await git.getBranches(other)).some((b) => b.name === 'origin/published'))
 })
 
+test('fetches on one repository run one at a time, so they never fight over FETCH_HEAD', async () => {
+  const { clone } = makeRemotePair()
+  // A shell alias that records when it starts and ends: overlapping runs would interleave.
+  const slow = ['-c', 'alias.slow=!echo start >> order.log; sleep 0.3; echo end >> order.log', 'slow']
+  const fetches = [git.fetchRemote(clone, { all: true, background: true }), git.fetchRemote(clone, { prune: true })]
+  await Promise.all([git.remoteGit(clone, slow), git.remoteGit(clone, slow), ...fetches])
+  assert.equal(readFileSync(join(clone, 'order.log'), 'utf8'), 'start\nend\nstart\nend\n')
+  // A failure does not block the next command on the same repository.
+  await assert.rejects(git.remoteGit(clone, ['fetch', 'no-such-remote']))
+  await git.fetchRemote(clone, {})
+})
+
+test('a FETCH_HEAD held by another program is retried, then explained', async () => {
+  const { clone } = makeRemotePair()
+  const busy = `echo "error: cannot open '.git/FETCH_HEAD': Permission denied" >&2; exit 1`
+  const once = `!if [ -e tried ]; then echo ok; else touch tried; ${busy}; fi`
+  assert.equal((await git.remoteGit(clone, ['-c', `alias.once=${once}`, 'once'])).stdout.trim(), 'ok')
+  await assert.rejects(git.remoteGit(clone, ['-c', `alias.busy=!${busy}`, 'busy']), /Another program is writing to \.git\/FETCH_HEAD/)
+})
+
 test('pull --rebase replays local commits on top of the remote', async () => {
   const { clone, other } = makeRemotePair()
   write(other, 'o.txt', 'o')

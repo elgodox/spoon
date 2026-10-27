@@ -170,6 +170,53 @@ export function authHint(message: string): string {
   return `${message}\n\nThe remote needs a username and password (or a personal access token). Sign in when Spoon asks, or set up Git Credential Manager.`
 }
 
+const remoteLocks = new Map<string, Promise<void>>()
+const FETCH_HEAD_BUSY = /FETCH_HEAD'?: Permission denied/i
+
+/**
+ * Run a command that writes .git/FETCH_HEAD (fetch, pull). Windows refuses a second writer
+ * ("cannot open '.git/FETCH_HEAD': Permission denied"), so commands on one repository wait
+ * for each other (auto-fetch, bulk fetch and the toolbar can overlap), and a file held by
+ * another program (VS Code auto-fetch, an antivirus) gets a couple of short retries.
+ */
+export function remoteGit(
+  cwd: string,
+  args: string[],
+  opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number; prompt?: boolean }
+): Promise<GitResult> {
+  const key = process.platform === 'win32' ? resolve(cwd).toLowerCase() : resolve(cwd)
+  const attempt = async (): Promise<GitResult> => {
+    for (const wait of [400, 1500]) {
+      try {
+        return await git(cwd, args, opts)
+      } catch (e) {
+        if (!FETCH_HEAD_BUSY.test((e as Error).message)) throw e
+      }
+      await new Promise((r) => setTimeout(r, wait))
+    }
+    try {
+      return await git(cwd, args, opts)
+    } catch (e) {
+      if (!FETCH_HEAD_BUSY.test((e as Error).message)) throw e
+      const err = new Error(
+        `${(e as Error).message}\n\nAnother program is writing to .git/FETCH_HEAD (another Git client, an editor's auto-fetch or an antivirus). Wait a moment and try again.`
+      )
+      ;(err as Error & { result?: GitResult }).result = (e as Error & { result?: GitResult }).result
+      throw err
+    }
+  }
+  const run = (remoteLocks.get(key) ?? Promise.resolve()).then(attempt)
+  const tail = run.then(
+    () => undefined,
+    () => undefined
+  )
+  remoteLocks.set(key, tail)
+  void tail.then(() => {
+    if (remoteLocks.get(key) === tail) remoteLocks.delete(key)
+  })
+  return run
+}
+
 const SCAN_SKIP = new Set([
   'node_modules',
   '.git',
@@ -788,7 +835,7 @@ export async function fetchRemote(cwd: string, opts: FetchOptions = {}): Promise
   else args.push(opts.remote)
   if (opts.prune) args.push('--prune')
   if (opts.tags) args.push('--tags')
-  return git(cwd, args, { prompt: !opts.background })
+  return remoteGit(cwd, args, { prompt: !opts.background })
 }
 
 export async function pullRemote(cwd: string, opts: PullOptions = {}): Promise<GitResult> {
@@ -805,7 +852,7 @@ export async function pullRemote(cwd: string, opts: PullOptions = {}): Promise<G
   if (opts.rebase) args.push('--rebase')
   if (opts.prune) args.push('--prune')
   if (opts.remote) args.push(opts.remote)
-  const r = await git(cwd, args, { prompt: true })
+  const r = await remoteGit(cwd, args, { prompt: true })
   if (stashed) await git(cwd, ['stash', 'pop'], { allowFail: true })
   return r
 }
@@ -1759,10 +1806,10 @@ export async function applyFix(path: string, fix: RepoFixId, input?: { name?: st
       return `Tracking ${remote}/${branch}`
     }
     case 'pull-ff':
-      await git(path, ['pull', '--ff-only'], { prompt: true })
+      await remoteGit(path, ['pull', '--ff-only'], { prompt: true })
       return 'Up to date'
     case 'prune':
-      await git(path, ['fetch', '--all', '--prune'], { prompt: true })
+      await remoteGit(path, ['fetch', '--all', '--prune'], { prompt: true })
       return 'Fetched and pruned'
     case 'gc':
       await git(path, ['gc', '--prune=now', '--quiet'])

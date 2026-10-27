@@ -297,7 +297,7 @@ async function bulkOne(action: BulkAction, path: string, name: string): Promise<
     if (!o.behind) return skip('Up to date')
     if (o.staged + o.unstaged + o.conflicts > 0) return skip('Has local changes')
     if (o.ahead) return skip('Diverged, pull it manually')
-    await git.git(path, ['pull', '--ff-only'])
+    await git.remoteGit(path, ['pull', '--ff-only'])
     return { path, name, ok: true, message: `Pulled ${o.behind} commit(s)` }
   }
   if (!o.ahead) return skip('Nothing to push')
