@@ -233,6 +233,27 @@ test('branch filter narrows branches and tags', async () => {
   await branchRow('main').waitFor()
 })
 
+test('tag menu: push to the remote, delete from the remote, delete locally', async () => {
+  const tagRow = () => page.locator('.sidebar .side-item').filter({ hasText: 'v1.0.0' }).first()
+  const remoteTags = () => git(bare, ['tag', '--list']).trim()
+  await tagRow().waitFor()
+  const items = await ui.pickMenu(() => tagRow().click({ button: 'right' }), 'tag-push')
+  assert.ok(items.some((item) => item.label === 'Push to origin'))
+  await ui.until(() => remoteTags() === 'v1.0.0', 'tag pushed')
+  await ui.confirmNext(true)
+  await ui.pickMenu(() => tagRow().click({ button: 'right' }), 'tag-delete-remote')
+  await ui.until(() => remoteTags() === '', 'tag deleted from the remote')
+  assert.equal(git(repo, ['tag', '--list']).trim(), 'v1.0.0', 'the local tag stays')
+  await ui.confirmNext(false)
+  await ui.pickMenu(() => tagRow().click({ button: 'right' }), 'tag-delete')
+  await page.waitForTimeout(400)
+  assert.equal(git(repo, ['tag', '--list']).trim(), 'v1.0.0', 'Cancel keeps the tag')
+  await ui.confirmNext(true)
+  await ui.pickMenu(() => tagRow().click({ button: 'right' }), 'tag-delete')
+  await ui.until(() => git(repo, ['tag', '--list']).trim() === '', 'tag deleted')
+  await tagRow().waitFor({ state: 'detached' })
+})
+
 test('toolbar sync: Pull brings teammate commits, Push publishes local commits', async () => {
   git(repo, ['push', '-q', 'origin', 'main'])
   git(teammate, ['checkout', '-q', 'main'])

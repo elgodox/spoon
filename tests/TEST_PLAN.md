@@ -33,6 +33,7 @@ A failed E2E step writes a screenshot to `output/e2e/fail-<test name>.png`.
   - Spoon starts with its own `userData`, home folder and global Git config.
   - Native dialogs, menus, `shell` and the clipboard are patched in the main process. They answer from queues and record what would have left the app.
   - No window is shown, nothing is opened in a browser or editor, and no real AI account is used.
+- **Credentials:** `SPOON_NO_SYSTEM_CREDS=1` keeps E2E runs away from the real Windows Credential Manager; unit tests inject a fake `cmdkey`.
 - **AI tests:** they talk to `tests/support/fake-ai.ts`, a local OpenAI-compatible server connected as a custom endpoint.
 
 ## Feature inventory and coverage
@@ -59,8 +60,10 @@ Legend: U = unit test, E = end-to-end test.
 | Scan folders (watched roots), rescan | E `home`, U `git-repos` (`scanRepos`) |
 | Add a repo, or a folder of repos (warns when there are none) | E `home` |
 | New repository (`git init` + README commit) | E `home`, U `git-repos` |
-| Clone (progress, custom folder name, error) | E `home`, U `git-repos` |
+| Clone (progress, custom folder name, error, remembers the last parent folder, Enter submits) | E `home`, U `git-repos` |
+| Clone on a machine without `user.name` / `user.email` asks for the commit identity | E `home` |
 | Credential prompt: clone / push / fetch from a password-protected remote ask in a Spoon dialog; background fetch never asks | E `home`, U `askpass` |
+| "Remember this account": saved after the remote accepts it, used by the next clone / push / background fetch, refused passwords are flagged and asked again | E `home`, U `credentials` |
 | Repo row menu: pin, remove, fetch… | E `home` |
 | Overview cache (`repo-records.json`) | U `main-services` |
 | Activity heat map (day/week/month/year buckets) | U `shared`, U `git-refs` (`activityDays`) |
@@ -86,6 +89,7 @@ Legend: U = unit test, E = end-to-end test.
 | Unified / side-by-side diff, ignore whitespace, context lines | U, E `changes` |
 | Image / PDF / video previews, 12 MB limit, path safety | U `git-repos`, E `changes` |
 | File menu: open in editor, reveal, copy path / patch, blame, history | E `changes`, U `main-services` |
+| File menu: Ignore file / extension / folder (`.gitignore`), untracked files only | E `changes`, U `credentials` (`ignorePaths`) |
 | Commit, Ctrl+Enter, amend, sign-off, no-verify, empty commit error | U, E `changes` |
 
 ### History
@@ -98,6 +102,7 @@ Legend: U = unit test, E = end-to-end test.
 | Layouts: Bottom / Side / Columns | E `history` |
 | Commit menu: checkout, cherry-pick, revert, reset mixed/hard, copy SHA | U, E `history` |
 | Commit menu: Create tag | E `history` |
+| Commit menu: Undo this commit (HEAD only; keeps changes staged, restores the message) | E `history`, U `credentials` (`undoLastCommit`) |
 | Reflog | U, E `history` |
 | Interactive rebase | E `history`, E `no-node` |
 | Branch / tag scope ("Commits in …", "Show all") | E `history`, E `refs` |
@@ -112,6 +117,7 @@ Legend: U = unit test, E = end-to-end test.
 | Remotes: add, edit URL, rename, fetch, remove | U, E `refs` |
 | Remote branch checkout | E `refs` |
 | Tags: create, annotated, delete, sidebar scope | U, E `refs` |
+| Tag menu: checkout, copy name, push to remote, delete from remote, delete | E `refs`, U `credentials` (`pushTag`, `deleteRemoteTag`) |
 | Stash: save (with untracked), view, apply, pop, drop, partial | U, E `refs` |
 | Submodules: list, init, update | U `git-repos` |
 | Worktrees, LFS listing | U `git-refs`, U `git-repos` |
@@ -143,6 +149,11 @@ Legend: U = unit test, E = end-to-end test.
 |---|---|
 | Appearance: packs, light/dark, SpaceX stays dark, icons, accents | E `app`, U `shared` |
 | Git settings: auto fetch, interval, auto update | E `app` |
+| Accounts: global and per-repository commit identity (validation, clear back to global) | E `app`, U `credentials` |
+| Accounts: saved Git accounts — add, edit (keeps the password), remove, encrypted on disk, non-HTTP servers refused | E `app`, U `credentials` |
+| Accounts: Spoon's credential helper runs before Git Credential Manager and keeps the configured helpers | U `credentials` |
+| Accounts: Windows Credential Manager listing and sign-out (`cmdkey`, any Windows language) | U `credentials` |
+| A commit without an identity opens Preferences → Accounts | manual |
 | Open with: detection (registry PATH, CLI install folders, no bash shims), rescan, default launcher | E `app`, U `main-services` |
 | Open with: launching IDEs / CLIs / terminal, errors shown, button icon follows the default | E `open-with`, U `main-services` |
 | Help links, rail keyboard navigation | E `app` |

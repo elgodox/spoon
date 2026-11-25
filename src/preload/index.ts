@@ -47,6 +47,10 @@ const api = {
     createTag: (path: string, name: string, message?: string, hash?: string) =>
       ipcRenderer.invoke('git:createTag', path, name, message, hash),
     deleteTag: (path: string, name: string) => ipcRenderer.invoke('git:deleteTag', path, name),
+    pushTag: (path: string, name: string, remote?: string) => ipcRenderer.invoke('git:pushTag', path, name, remote),
+    deleteRemoteTag: (path: string, name: string, remote?: string) => ipcRenderer.invoke('git:deleteRemoteTag', path, name, remote),
+    undoCommit: (path: string) => ipcRenderer.invoke('git:undoCommit', path),
+    ignore: (path: string, patterns: string[]) => ipcRenderer.invoke('git:ignore', path, patterns),
     stash: (path: string, message?: string, files?: string[]) => ipcRenderer.invoke('git:stash', path, message, files),
     stashApply: (path: string, sel: string, pop: boolean) => ipcRenderer.invoke('git:stashApply', path, sel, pop),
     stashDrop: (path: string, sel: string) => ipcRenderer.invoke('git:stashDrop', path, sel),
@@ -109,6 +113,16 @@ const api = {
     addEndpoint: (endpoint: object, apiKey?: string) => ipcRenderer.invoke('ai:addEndpoint', endpoint, apiKey),
     removeEndpoint: (id: string) => ipcRenderer.invoke('ai:removeEndpoint', id)
   },
+  credentials: {
+    list: () => ipcRenderer.invoke('cred:list'),
+    save: (input: { id?: string; url: string; username: string; password?: string }) => ipcRenderer.invoke('cred:save', input),
+    remove: (id: string) => ipcRenderer.invoke('cred:remove', id),
+    system: () => ipcRenderer.invoke('cred:system'),
+    removeSystem: (target: string) => ipcRenderer.invoke('cred:removeSystem', target),
+    identity: (path?: string) => ipcRenderer.invoke('identity:get', path),
+    setIdentity: (scope: 'global' | 'local', value: { name: string; email: string }, path?: string) =>
+      ipcRenderer.invoke('identity:set', scope, value, path)
+  },
   profile: {
     identity: (path?: string) => ipcRenderer.invoke('profile:identity', path),
     pick: () => ipcRenderer.invoke('profile:pick'),
@@ -154,7 +168,7 @@ const api = {
     update: () => ipcRenderer.invoke('app:update'),
     checkUpdate: () => ipcRenderer.invoke('app:checkUpdate'),
     installUpdate: () => ipcRenderer.invoke('app:installUpdate'),
-    answerCredential: (id: string, answer: { value: string; password?: string } | null) =>
+    answerCredential: (id: string, answer: { value: string; password?: string; remember?: boolean } | null) =>
       ipcRenderer.invoke('credential:answer', id, answer),
     on: (channel: string, fn: (...args: unknown[]) => void) => {
       const listener = (_e: unknown, ...args: unknown[]) => fn(...args)

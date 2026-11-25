@@ -9,3 +9,5 @@ Thumbs.db
 .env.*
 # Screenshots of failed end-to-end steps (npm run test:e2e)
 output/e2e/
+output/shots/
+output/e2e/

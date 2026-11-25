@@ -4310,6 +4310,22 @@
         "background": "rgba(0, 0, 0, 0)"
       },
       {
+        "label": "Accounts",
+        "variant": "navigation",
+        "compact": false,
+        "className": "spoon-button rail-item",
+        "height": "36px",
+        "minHeight": "36px",
+        "radius": "8px",
+        "fontSize": "12px",
+        "weight": "500",
+        "padding": "7px 10px",
+        "opacity": "1",
+        "disabled": false,
+        "border": "1px",
+        "background": "rgba(0, 0, 0, 0)"
+      },
+      {
         "label": "Git",
         "variant": "navigation",
         "compact": false,
@@ -5099,6 +5115,22 @@
         "background": "rgb(20, 20, 20)"
       },
       {
+        "label": "Accounts",
+        "variant": "navigation",
+        "compact": false,
+        "className": "spoon-button rail-item",
+        "height": "36px",
+        "minHeight": "36px",
+        "radius": "8px",
+        "fontSize": "12px",
+        "weight": "500",
+        "padding": "7px 10px",
+        "opacity": "1",
+        "disabled": false,
+        "border": "1px",
+        "background": "rgba(0, 0, 0, 0)"
+      },
+      {
         "label": "Git",
         "variant": "navigation",
         "compact": false,
@@ -5792,6 +5824,22 @@
         "background": "rgba(0, 0, 0, 0)"
       },
       {
+        "label": "Accounts",
+        "variant": "navigation",
+        "compact": false,
+        "className": "spoon-button rail-item",
+        "height": "36px",
+        "minHeight": "36px",
+        "radius": "8px",
+        "fontSize": "12px",
+        "weight": "500",
+        "padding": "7px 10px",
+        "opacity": "1",
+        "disabled": false,
+        "border": "1px",
+        "background": "rgba(0, 0, 0, 0)"
+      },
+      {
         "label": "Git",
         "variant": "navigation",
         "compact": false,
@@ -6358,6 +6406,22 @@
       },
       {
         "label": "Profile",
+        "variant": "navigation",
+        "compact": false,
+        "className": "spoon-button rail-item",
+        "height": "36px",
+        "minHeight": "36px",
+        "radius": "8px",
+        "fontSize": "12px",
+        "weight": "500",
+        "padding": "7px 10px",
+        "opacity": "1",
+        "disabled": false,
+        "border": "1px",
+        "background": "rgba(0, 0, 0, 0)"
+      },
+      {
+        "label": "Accounts",
         "variant": "navigation",
         "compact": false,
         "className": "spoon-button rail-item",
@@ -7147,6 +7211,22 @@
       },
       {
         "label": "Profile",
+        "variant": "navigation",
+        "compact": false,
+        "className": "spoon-button rail-item",
+        "height": "36px",
+        "minHeight": "36px",
+        "radius": "8px",
+        "fontSize": "12px",
+        "weight": "500",
+        "padding": "7px 10px",
+        "opacity": "1",
+        "disabled": false,
+        "border": "1px",
+        "background": "rgba(0, 0, 0, 0)"
+      },
+      {
+        "label": "Accounts",
         "variant": "navigation",
         "compact": false,
         "className": "spoon-button rail-item",
@@ -8160,6 +8240,22 @@
       },
       {
         "label": "Profile",
+        "variant": "navigation",
+        "compact": false,
+        "className": "spoon-button rail-item",
+        "height": "36px",
+        "minHeight": "36px",
+        "radius": "8px",
+        "fontSize": "12px",
+        "weight": "500",
+        "padding": "7px 10px",
+        "opacity": "1",
+        "disabled": false,
+        "border": "1px",
+        "background": "rgba(0, 0, 0, 0)"
+      },
+      {
+        "label": "Accounts",
         "variant": "navigation",
         "compact": false,
         "className": "spoon-button rail-item",
@@ -10693,7 +10789,7 @@
         "opacity": "1",
         "disabled": false,
         "border": "1px",
-        "background": "rgb(20, 20, 20)"
+        "background": "rgba(0, 0, 0, 0)"
       },
       {
         "label": "Settings",

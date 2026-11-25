@@ -203,6 +203,30 @@ test('clicking a local branch in another view scopes history to it', async () =>
   await page.getByPlaceholder('Search commits').waitFor()
 })
 
+test('commit menu: Undo this commit keeps the changes staged and restores the message', async () => {
+  git(repo, ['checkout', '-q', '-f', 'main'])
+  writeFile(repo, 'undo.txt', 'take me back\n')
+  const sha = commitAll(repo, 'feat: undo me')
+  const parent = hashOf('HEAD~1')
+  await view(page, 'History')
+  await page.locator('.toolbar .tb-btn[data-ico="refresh"]').click()
+  await ui.idle()
+  await commitRow('feat: undo me').waitFor()
+  // Only the commit at HEAD offers it.
+  const older = await ui.pickMenu(() => page.locator(`.commit-row[aria-label*="${parent.slice(0, 7)}"]`).click({ button: 'right' }), `cp:${parent}`)
+  assert.ok(!older.some((item) => item.id?.startsWith('un:')))
+  await ui.confirmNext(false)
+  await ui.pickMenu(() => commitRow('feat: undo me').click({ button: 'right' }), `un:${sha}`)
+  await page.waitForTimeout(500)
+  assert.equal(hashOf('HEAD'), sha, 'Cancel keeps the commit')
+  await ui.confirmNext(true)
+  await ui.pickMenu(() => commitRow('feat: undo me').click({ button: 'right' }), `un:${sha}`)
+  await ui.until(() => hashOf('HEAD') === parent, 'commit undone')
+  assert.equal(git(repo, ['diff', '--cached', '--name-only']).trim(), 'undo.txt')
+  await ui.until(async () => (await page.getByPlaceholder('Commit message · Ctrl+Enter to commit').inputValue()) === 'feat: undo me', 'message back in the commit box')
+  git(repo, ['reset', '-q', '--hard'])
+})
+
 test('no uncaught renderer errors', () => {
   assert.deepEqual(ui.unexpectedPageErrors(), [])
 })

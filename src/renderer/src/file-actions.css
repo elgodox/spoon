@@ -51,3 +51,30 @@ html[data-theme='light'] .avatar.photo { outline-color: #0000001a; }
 .type-chip:hover { background: var(--btn); }
 .type-chip.on { background: color-mix(in srgb, var(--accent) 18%, var(--bg)); border-color: var(--accent); color: var(--accent); }
 .type-chip.on span { opacity: 0.85; }
+
+/* Preferences → Accounts, and the sign-in dialog. */
+.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; }
+.field-grid > div { min-width: 0; }
+.account-card { padding: 6px 16px 14px; margin: 8px 0 4px; background: var(--chrome); border: 1px solid var(--border); border-radius: 12px; }
+.account-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block-start: 14px; }
+.account-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-block-start: 6px; }
+.account-heading h3 { margin-block-end: 8px; }
+.account-heading .spoon-button .lucide { width: 14px; height: 14px; }
+.account-list { list-style: none; margin: 8px 0 4px; padding: 0; border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.account-row { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 10px 8px 14px; background: var(--chrome); }
+.account-row + .account-row { border-top: 1px solid var(--border); }
+.account-ico { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 9px; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.account-ico .lucide { width: 15px; height: 15px; }
+.account-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.account-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.account-text .hint { display: inline-flex; align-items: center; gap: 5px; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-text .hint .lucide { width: 12px; height: 12px; flex-shrink: 0; }
+.account-row .spoon-button .lucide { width: 15px; height: 15px; }
+.account-badge { flex-shrink: 0; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.account-row.rejected .account-ico { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.account-empty { margin: 8px 0 4px; padding: 18px; text-align: center; color: var(--muted); border: 1px dashed var(--border); border-radius: 12px; }
+.account-warning { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; font-size: 12px; color: var(--text); background: color-mix(in srgb, var(--yellow, #d9a441) 16%, transparent); }
+.account-warning .lucide { width: 15px; height: 15px; flex-shrink: 0; color: var(--yellow, #d9a441); }
+.credential-remember > span { display: flex; flex-direction: column; gap: 2px; }
+.credential-remember .hint { margin: 0; }
+@media (max-width: 640px) { .field-grid { grid-template-columns: 1fr; } }

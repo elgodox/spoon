@@ -22,6 +22,8 @@ import type {
   CommitOptions,
   CredentialAnswer,
   CredentialRequest,
+  GitCredentialInput,
+  GitIdentity,
   FetchOptions,
   PullOptions,
   PushOptions,
@@ -39,6 +41,7 @@ import { analyzeRepository, analyzeWorkspaces, generateCommitMessage, generateSt
 import * as launchers from './launchers'
 import * as profile from './profile'
 import { createAskpassResponder, startAskpass } from './askpass'
+import * as credentials from './git-credentials'
 import { mapIndexLine } from '../shared/change-location'
 import { listProviderModels } from './model-catalog'
 
@@ -814,6 +817,16 @@ function registerIpc(): void {
     git.createTag(path, name, message, hash)
   )
   ipcMain.handle('git:deleteTag', (_e, path: string, name: string) => git.deleteTag(path, name))
+  ipcMain.handle('git:pushTag', (_e, path: string, name: string, remote?: string) =>
+    withActivity('Push tag', `git push ${remote ?? 'origin'} ${name}`, () => git.pushTag(path, name, remote))
+  )
+  ipcMain.handle('git:deleteRemoteTag', (_e, path: string, name: string, remote?: string) =>
+    withActivity('Delete remote tag', `git push --delete ${remote ?? 'origin'} ${name}`, () => git.deleteRemoteTag(path, name, remote))
+  )
+  ipcMain.handle('git:undoCommit', (_e, path: string) =>
+    withActivity('Undo commit', 'git reset --soft HEAD~1', () => git.undoLastCommit(path))
+  )
+  ipcMain.handle('git:ignore', (_e, path: string, patterns: string[]) => git.ignorePaths(path, patterns))
   ipcMain.handle('git:stash', (_e, path: string, message?: string, files?: string[]) => git.stashPush(path, message, files))
   ipcMain.handle('git:stashApply', (_e, path: string, sel: string, pop: boolean) => git.stashApply(path, sel, pop))
   ipcMain.handle('git:stashDrop', (_e, path: string, sel: string) => git.stashDrop(path, sel))
@@ -882,6 +895,15 @@ function registerIpc(): void {
     watchRepo(dest)
     return dest
   })
+  ipcMain.handle('cred:list', () => credentials.listCredentials())
+  ipcMain.handle('cred:save', (_e, input: GitCredentialInput) => credentials.saveCredential(input))
+  ipcMain.handle('cred:remove', (_e, id: string) => credentials.removeCredential(id))
+  ipcMain.handle('cred:system', () => credentials.listSystemCredentials())
+  ipcMain.handle('cred:removeSystem', (_e, target: string) => credentials.removeSystemCredential(target))
+  ipcMain.handle('identity:get', (_e, path?: string) => git.identityInfo(path))
+  ipcMain.handle('identity:set', (_e, scope: 'global' | 'local', value: GitIdentity, path?: string) =>
+    git.setIdentity(scope, value, path)
+  )
   ipcMain.handle('credential:answer', (_e, id: string, answer: CredentialAnswer | null) => {
     credentialWaits.get(id)?.(answer && typeof answer.value === 'string' ? answer : null)
   })
@@ -1023,7 +1045,16 @@ app.whenReady().then(async () => {
   registerIpc()
   buildMenu()
   createWindow()
-  startAskpass(join(app.getPath('userData'), 'askpass'), createAskpassResponder(askCredential))
+  startAskpass(
+    join(app.getPath('userData'), 'askpass'),
+    createAskpassResponder(async (request) => {
+      const answer = await askCredential(credentials.describeRequest(request))
+      credentials.noteAnswer(request, answer)
+      return answer
+    }),
+    process.execPath,
+    credentials.credentialHelper
+  )
     .then(git.setPromptEnv)
     .catch((e) => console.error('Credential prompts unavailable:', e))
   const gitReady = git.findGit().catch(async (e) => {

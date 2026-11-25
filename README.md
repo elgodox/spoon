@@ -22,7 +22,7 @@
 
 ## Why Spoon
 
-Spoon is a native desktop Git client for Windows. It uses the `git` you already have (including Git Credential Manager), so clone, fetch, and push work the same way they do in the terminal.
+Spoon is a native desktop Git client for Windows. It uses the `git` you already have (including Git Credential Manager), so clone, fetch, and push work the same way they do in the terminal. Accounts you save in Spoon are tried first.
 
 Layout is familiar: repo tabs, a refs sidebar, a commit graph, a changes view, and a commit box. On top of that it writes commit messages with **Grok**, **ChatGPT**, **Claude**, or any OpenAI-compatible API (OpenRouter, Groq, Gemini, Ollama, …), and can split a dirty worktree into one local commit per change.
 
@@ -36,7 +36,7 @@ Layout is familiar: repo tabs, a refs sidebar, a commit graph, a changes view, a
 
 Spoon does not need Node.js to run. Node is only for building from source.
 
-API keys and OAuth tokens stay on this machine (`%APPDATA%\spoon\spoon.json`). They are never sent to a Spoon server.
+API keys, OAuth tokens, and saved Git passwords stay on this machine (`%APPDATA%\spoon\spoon.json`). They are never sent to a Spoon server.
 
 ## Quick start
 
@@ -61,10 +61,19 @@ API keys and OAuth tokens stay on this machine (`%APPDATA%\spoon\spoon.json`). T
 - Local and remote branches, grouped by remote
 - Create, rename, and delete branches from the sidebar
 - Add, edit, rename, or remove remotes
-- Tags, stash, reflog, interactive rebase, cherry-pick, revert, reset
+- Tags (push to or delete from the remote), stash, reflog, interactive rebase, cherry-pick, revert, reset
+
+**Accounts**
+- Set the name and email Git signs commits with — for every repository, or only for one
+- Save the username and password (or personal access token) for each HTTPS server; Git uses them to clone, fetch, pull, and push without asking
+- Cloning or pushing to a private remote asks you to sign in inside Spoon and can remember the account
+- Passwords are encrypted by Windows; a password the server refuses is flagged and asked again
+- See and sign out of the logins Git Credential Manager keeps in Windows Credential Manager
 
 **Changes**
 - Stage / unstage files and hunks
+- Ignore a file, an extension, or a folder from the file menu
+- Undo the last commit and keep its changes staged
 - Multi-select in Unstaged and Staged
 - Unified or side-by-side diff
 - Preview images, GIF, video, audio, and PDF (up to 12 MB)

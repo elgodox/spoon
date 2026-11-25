@@ -31,6 +31,19 @@ interface StoreFile {
   workspaces: RepoWorkspace[]
   session: AppSession
   creds: Record<string, string>
+  gitCreds?: StoredGitCredential[]
+}
+
+/** A saved Git account. `secret` is the password, encrypted with the OS keychain when available. */
+export interface StoredGitCredential {
+  id: string
+  protocol: string
+  host: string
+  username: string
+  secret: string
+  updatedAt: number
+  usedAt?: number
+  rejected?: boolean
 }
 
 function sanitizeTheme(theme: unknown): ThemeMode {
@@ -123,7 +136,8 @@ function load(): StoreFile {
       folders: parsed.folders ?? [],
       workspaces: sanitizeWorkspaces(parsed.workspaces),
       session: sanitizeSession((parsed as { session?: unknown }).session),
-      creds: parsed.creds ?? {}
+      creds: parsed.creds ?? {},
+      gitCreds: sanitizeGitCreds((parsed as { gitCreds?: unknown }).gitCreds)
     }
     if (!cache.settings.defaultLauncher) {
       cache.settings.defaultLauncher = launcherFromEditor(cache.settings.editor)
@@ -316,6 +330,44 @@ export function loadCreds(provider: AiProviderId): StoredAiCreds | null {
   } catch {
     return null
   }
+}
+
+function sanitizeGitCreds(raw: unknown): StoredGitCredential[] {
+  if (!Array.isArray(raw)) return []
+  return raw.filter(
+    (item): item is StoredGitCredential =>
+      !!item &&
+      typeof item === 'object' &&
+      typeof (item as StoredGitCredential).id === 'string' &&
+      typeof (item as StoredGitCredential).host === 'string' &&
+      typeof (item as StoredGitCredential).username === 'string' &&
+      typeof (item as StoredGitCredential).secret === 'string'
+  )
+}
+
+export function encryptSecret(text: string): string {
+  return safeStorage.isEncryptionAvailable()
+    ? safeStorage.encryptString(text).toString('base64')
+    : Buffer.from(text, 'utf8').toString('base64')
+}
+
+export function decryptSecret(blob: string): string | null {
+  try {
+    const buf = Buffer.from(blob, 'base64')
+    return safeStorage.isEncryptionAvailable() ? safeStorage.decryptString(buf) : buf.toString('utf8')
+  } catch {
+    return null
+  }
+}
+
+export function getGitCreds(): StoredGitCredential[] {
+  return load().gitCreds ?? []
+}
+
+export function setGitCreds(list: StoredGitCredential[]): void {
+  const data = load()
+  data.gitCreds = list
+  save(data)
 }
 
 export function clearCreds(provider: AiProviderId): void {

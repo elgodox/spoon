@@ -175,6 +175,8 @@ export async function launch(box, opts = {}) {
       ...process.env,
       ...box.env,
       ...opts.env,
+      // Never read the real Windows Credential Manager from a test run.
+      SPOON_NO_SYSTEM_CREDS: '1',
       SPOON_UI_DATA: box.data,
       SPOON_MAIN: join(root, 'out/main/index.js'),
       ELECTRON_RUN_AS_NODE: undefined,

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
@@ -15,6 +15,8 @@ import type {
   DiffLine,
   FetchOptions,
   FileDiff,
+  GitIdentity,
+  GitIdentityInfo,
   FileTreeNode,
   MediaPair,
   MediaSide,
@@ -64,10 +66,36 @@ export interface GitResult {
 
 let gitExe = 'git'
 let promptEnv: NodeJS.ProcessEnv = {}
+/** Spoon's credential helper without the dialogs: saved accounts work, nothing is asked. */
+let helperEnv: NodeJS.ProcessEnv = {}
 
 /** Environment that lets Git ask the user for credentials (see askpass.ts). */
 export function setPromptEnv(env: NodeJS.ProcessEnv): void {
   promptEnv = env
+  const { GIT_ASKPASS: _a, SSH_ASKPASS: _s, SSH_ASKPASS_REQUIRE: _r, ...rest } = env
+  helperEnv = env.SPOON_CREDENTIAL_HELPER ? rest : {}
+}
+
+/**
+ * `-c` arguments that put Spoon's credential helper in front of the helpers Git already has
+ * (Git Credential Manager, …). Git only lets a command line append helpers, so the list is
+ * cleared and rebuilt in the configured order behind Spoon's.
+ */
+export async function credentialArgs(cwd?: string): Promise<string[]> {
+  const helper = promptEnv.SPOON_CREDENTIAL_HELPER
+  if (!helper) return []
+  const mine = `!sh "${helper}"`
+  const args = ['-c', 'credential.helper=', '-c', `credential.helper=${mine}`]
+  const r = await runGitRaw(cwd && existsSync(cwd) ? cwd : undefined, ['config', '-z', '--get-regexp', '^credential\\.(.*\\.)?helper$']).catch(() => null)
+  for (const entry of r?.code === 0 ? r.stdout.split('\0') : []) {
+    if (!entry) continue
+    const at = entry.indexOf('\n')
+    const key = at < 0 ? entry : entry.slice(0, at)
+    const value = at < 0 ? '' : entry.slice(at + 1)
+    if (value === mine || (!value && key.toLowerCase() === 'credential.helper')) continue
+    args.push('-c', `${key}=${value}`)
+  }
+  return args
 }
 
 export function setGitPath(path?: string): void {
@@ -99,7 +127,7 @@ export async function findGit(): Promise<string> {
 function runGitRaw(
   cwd: string | undefined,
   args: string[],
-  opts?: { stdin?: string; git?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; prompt?: boolean }
+  opts?: { stdin?: string; git?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number; prompt?: boolean; saved?: boolean }
 ): Promise<GitResult> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn(opts?.git ?? gitExe, args, {
@@ -107,7 +135,7 @@ function runGitRaw(
       windowsHide: true,
       env: {
         ...process.env,
-        ...(opts?.prompt ? promptEnv : {}),
+        ...(opts?.prompt ? promptEnv : opts?.saved ? helperEnv : {}),
         ...opts?.env,
         GIT_OPTIONAL_LOCKS: '0',
         GIT_TERMINAL_PROMPT: '0',
@@ -152,9 +180,10 @@ function runGitRaw(
 export async function git(
   cwd: string,
   args: string[],
-  opts?: { stdin?: string; allowFail?: boolean; env?: NodeJS.ProcessEnv; timeoutMs?: number; prompt?: boolean }
+  opts?: { stdin?: string; allowFail?: boolean; env?: NodeJS.ProcessEnv; timeoutMs?: number; prompt?: boolean; saved?: boolean }
 ): Promise<GitResult> {
-  const r = await runGitRaw(cwd, ['-c', 'core.quotepath=false', '-c', 'i18n.logoutputencoding=utf-8', ...args], opts)
+  const credentials = opts?.prompt || opts?.saved ? await credentialArgs(cwd) : []
+  const r = await runGitRaw(cwd, ['-c', 'core.quotepath=false', '-c', 'i18n.logoutputencoding=utf-8', ...credentials, ...args], opts)
   if (r.code !== 0 && !opts?.allowFail) {
     const msg = authHint((r.stderr || r.stdout || `git ${args.join(' ')} failed`).trim())
     const err = new Error(msg)
@@ -166,8 +195,10 @@ export async function git(
 
 /** Git's "terminal prompts disabled" means nobody answered the credential prompt. */
 export function authHint(message: string): string {
+  if (/Authentication failed for|invalid credentials|HTTP Basic: Access denied/i.test(message))
+    return `${message}\n\nThe remote refused the username or password. Try again to sign in, or review your accounts in Preferences → Accounts.`
   if (!/terminal prompts disabled|could not read (Username|Password)/i.test(message)) return message
-  return `${message}\n\nThe remote needs a username and password (or a personal access token). Sign in when Spoon asks, or set up Git Credential Manager.`
+  return `${message}\n\nThe remote needs a username and password (or a personal access token). Sign in when Spoon asks, or add the account in Preferences → Accounts.`
 }
 
 const remoteLocks = new Map<string, Promise<void>>()
@@ -182,7 +213,7 @@ const FETCH_HEAD_BUSY = /FETCH_HEAD'?: Permission denied/i
 export function remoteGit(
   cwd: string,
   args: string[],
-  opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number; prompt?: boolean }
+  opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number; prompt?: boolean; saved?: boolean }
 ): Promise<GitResult> {
   const key = process.platform === 'win32' ? resolve(cwd).toLowerCase() : resolve(cwd)
   const attempt = async (): Promise<GitResult> => {
@@ -370,7 +401,7 @@ export async function cloneRepo(
 ): Promise<string> {
   mkdirSync(opts.directory, { recursive: true })
   const target = opts.name ? join(opts.directory, opts.name) : join(opts.directory, guessCloneName(opts.url))
-  const args = ['clone', '--progress']
+  const args = [...(await credentialArgs(opts.directory)), 'clone', '--progress']
   if (opts.recursive) args.push('--recurse-submodules')
   args.push(opts.url, target)
   const r = await new Promise<GitResult>((resolvePromise, reject) => {
@@ -835,7 +866,7 @@ export async function fetchRemote(cwd: string, opts: FetchOptions = {}): Promise
   else args.push(opts.remote)
   if (opts.prune) args.push('--prune')
   if (opts.tags) args.push('--tags')
-  return remoteGit(cwd, args, { prompt: !opts.background })
+  return remoteGit(cwd, args, { prompt: !opts.background, saved: true })
 }
 
 export async function pullRemote(cwd: string, opts: PullOptions = {}): Promise<GitResult> {
@@ -928,6 +959,46 @@ export async function revertCommits(cwd: string, hashes: string[]): Promise<GitR
 
 export async function resetTo(cwd: string, hash: string, mode: 'soft' | 'mixed' | 'hard'): Promise<void> {
   await git(cwd, ['reset', `--${mode}`, hash])
+}
+
+/** Take back the last commit and keep its changes staged. Returns the message, to edit and commit again. */
+export async function undoLastCommit(cwd: string): Promise<string> {
+  const head = await git(cwd, ['rev-parse', '--verify', '-q', 'HEAD'], { allowFail: true })
+  if (head.code !== 0) throw new Error('There is no commit to undo.')
+  const message = (await git(cwd, ['log', '-1', '--format=%B'])).stdout.trim()
+  const parents = (await git(cwd, ['rev-list', '--parents', '-n', '1', 'HEAD'])).stdout.trim().split(/\s+/).length - 1
+  if (parents > 1) throw new Error('The last commit is a merge. Use Reset in History to undo it.')
+  // The first commit has no parent to reset to: drop the branch pointer and keep the index.
+  if (parents === 0) await git(cwd, ['update-ref', '-d', 'HEAD'])
+  else await git(cwd, ['reset', '--soft', 'HEAD~1'])
+  return message
+}
+
+/** Add patterns to the repository's .gitignore. Returns the ones that were not there yet. */
+export async function ignorePaths(cwd: string, patterns: string[]): Promise<string[]> {
+  const file = join(cwd, '.gitignore')
+  const current = existsSync(file) ? readFileSync(file, 'utf8') : ''
+  const known = new Set(current.split(/\r?\n/).map((line) => line.trim()))
+  const fresh = [...new Set(patterns.map((p) => p.trim().replace(/\\/g, '/')).filter((p) => p && !known.has(p)))]
+  if (!fresh.length) return []
+  const eol = current.includes('\r\n') ? '\r\n' : '\n'
+  appendFileSync(file, `${current && !/\n$/.test(current) ? eol : ''}${fresh.join(eol)}${eol}`, 'utf8')
+  return fresh
+}
+
+async function tagRemote(cwd: string, remote?: string): Promise<string> {
+  if (remote) return remote
+  const names = (await getRemotes(cwd)).map((r) => r.name)
+  if (!names.length) throw new Error('This repository has no remote. Add one first.')
+  return names.includes('origin') ? 'origin' : names[0]
+}
+
+export async function pushTag(cwd: string, name: string, remote?: string): Promise<void> {
+  await git(cwd, ['push', await tagRemote(cwd, remote), `refs/tags/${name}`], { prompt: true })
+}
+
+export async function deleteRemoteTag(cwd: string, name: string, remote?: string): Promise<void> {
+  await git(cwd, ['push', await tagRemote(cwd, remote), '--delete', `refs/tags/${name}`], { prompt: true })
 }
 
 export async function createTag(cwd: string, name: string, message?: string, hash?: string): Promise<void> {
@@ -1369,6 +1440,43 @@ export async function continueMerge(cwd: string): Promise<GitResult> {
 export async function gitConfig(cwd: string, key: string): Promise<string> {
   const r = await git(cwd, ['config', '--get', key], { allowFail: true })
   return r.stdout.trim()
+}
+
+async function scopedIdentity(cwd: string | undefined, scope: '--global' | '--local'): Promise<GitIdentity> {
+  const read = async (key: string) => {
+    const r = await runGitRaw(cwd, ['config', scope, '--get', key]).catch(() => null)
+    return r?.code === 0 ? r.stdout.trim() : ''
+  }
+  return { name: await read('user.name'), email: await read('user.email') }
+}
+
+/** The global Git identity, the repository's own override, and the credential helpers Git runs. */
+export async function identityInfo(cwd?: string): Promise<GitIdentityInfo> {
+  const repo = cwd && (await isRepo(cwd)) ? cwd : undefined
+  const helpers = await runGitRaw(repo, ['config', '--get-all', 'credential.helper']).catch(() => null)
+  return {
+    global: await scopedIdentity(undefined, '--global'),
+    local: repo ? await scopedIdentity(repo, '--local') : undefined,
+    helpers: [...new Set((helpers?.code === 0 ? helpers.stdout : '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean))]
+  }
+}
+
+/** Save the name and email Git signs commits with. An empty repository identity goes back to the global one. */
+export async function setIdentity(scope: 'global' | 'local', value: GitIdentity, cwd?: string): Promise<GitIdentityInfo> {
+  const name = value.name.trim()
+  const email = value.email.trim()
+  if (scope === 'local') {
+    if (!cwd) throw new Error('Open a repository first.')
+    if (!!name !== !!email) throw new Error('Enter both the name and the email, or clear both to use the global identity.')
+  } else if (!name || !email) throw new Error('Name and email are required.')
+  if (email && !/^\S+@\S+$/.test(email)) throw new Error('That email address does not look right.')
+  const flag = scope === 'global' ? '--global' : '--local'
+  for (const [key, text] of [['user.name', name], ['user.email', email]] as const) {
+    const r = await runGitRaw(scope === 'global' ? undefined : cwd, text ? ['config', flag, key, text] : ['config', flag, '--unset-all', key])
+    // Unsetting a key that is not there exits with 5.
+    if (r.code !== 0 && text) throw new Error(r.stderr.trim() || 'Git could not save the identity.')
+  }
+  return identityInfo(cwd)
 }
 
 export async function identity(cwd: string): Promise<{ name: string; email: string }> {

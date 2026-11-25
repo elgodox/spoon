@@ -4,7 +4,7 @@ import { after, afterEach, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { launch, sandbox, toolbar, writeFile } from './harness.mjs'
+import { git, launch, sandbox, toolbar, writeFile } from './harness.mjs'
 
 let box, ui, page, one, two
 const settingsFile = () => JSON.parse(readFileSync(join(box.data, 'spoon.json'), 'utf8'))
@@ -71,6 +71,88 @@ test('Git: automatic fetch and update settings persist', async () => {
   }, 'git settings saved')
   await pane.getByLabel('Fetch the open repository on a timer').uncheck()
   await ui.until(() => settingsFile().settings.autoFetch === false, 'autoFetch off')
+})
+
+test('Accounts: the global and per-repository commit identity', async () => {
+  await openPrefs('Accounts')
+  const pane = prefs().locator('#prefs-panel-accounts')
+  const globalForm = pane.getByRole('form', { name: 'Global identity' })
+  const save = globalForm.getByRole('button', { name: 'Save identity', exact: true })
+  await ui.until(async () => (await globalForm.getByLabel('Name').inputValue()) === 'Spoon Tester', 'global identity loaded')
+  assert.equal(await save.isDisabled(), true, 'nothing to save yet')
+  await globalForm.getByLabel('Name').fill('Ada Lovelace')
+  await globalForm.getByLabel('Email').fill('not-an-email')
+  assert.equal(await save.isDisabled(), true, 'an invalid email cannot be saved')
+  await globalForm.getByLabel('Email').fill('ada@example.com')
+  await save.click()
+  // Name and email are two `git config` writes: wait for both.
+  await ui.until(() => git(one, ['config', '--global', 'user.name']).trim() === 'Ada Lovelace' && git(one, ['config', '--global', 'user.email']).trim() === 'ada@example.com', 'global identity saved')
+
+  // Only in this repository.
+  const localForm = pane.getByRole('form', { name: 'Repository identity' })
+  await localForm.getByLabel('Name').fill('Work Me')
+  await localForm.getByLabel('Email').fill('me@work.dev')
+  await localForm.getByRole('button', { name: 'Save for this repository', exact: true }).click()
+  await ui.until(() => git(one, ['config', '--local', '--get', 'user.email']).trim() === 'me@work.dev', 'repository identity saved')
+  await ui.until(() => git(one, ['config', 'user.name']).trim() === 'Work Me', 'repository name saved')
+  await localForm.getByRole('button', { name: 'Use the global identity', exact: true }).click()
+  await ui.until(() => git(one, ['config', 'user.name']).trim() === 'Ada Lovelace', 'back to the global identity')
+
+  // Put the test identity back for the rest of the suite.
+  await globalForm.getByLabel('Name').fill('Spoon Tester')
+  await globalForm.getByLabel('Email').fill('tester@example.com')
+  await save.click()
+  await ui.until(() => git(one, ['config', '--global', 'user.email']).trim() === 'tester@example.com' && git(one, ['config', '--global', 'user.name']).trim() === 'Spoon Tester', 'identity restored')
+  await closePrefs()
+})
+
+test('Accounts: add, edit and remove a saved Git account', async () => {
+  await openPrefs('Accounts')
+  const pane = prefs().locator('#prefs-panel-accounts')
+  await pane.getByText(/No saved accounts yet/).waitFor()
+  await pane.getByRole('button', { name: 'Add account', exact: true }).click()
+  const form = pane.getByRole('form', { name: 'Add account' })
+  const saveAccount = form.getByRole('button', { name: 'Save account', exact: true })
+  assert.equal(await saveAccount.isDisabled(), true)
+  await form.getByLabel('Server').fill('https://github.com/elgodox/spoon.git')
+  await form.getByLabel('Username').fill('alan')
+  await form.getByLabel('Personal access token').fill('ghp_secret_token')
+  await saveAccount.click()
+  const accountRow = pane.locator('.account-row').filter({ hasText: 'github.com' })
+  await accountRow.getByText('alan', { exact: true }).waitFor()
+  await ui.until(() => (settingsFile().gitCreds ?? []).length === 1, 'account saved')
+  assert.deepEqual([settingsFile().gitCreds[0].protocol, settingsFile().gitCreds[0].host], ['https', 'github.com'])
+  assert.ok(!readFileSync(join(box.data, 'spoon.json'), 'utf8').includes('ghp_secret_token'), 'the token is encrypted on disk')
+
+  // Edit: a new username, the saved token is kept.
+  const secret = settingsFile().gitCreds[0].secret
+  await accountRow.getByRole('button', { name: 'Edit alan at github.com', exact: true }).click()
+  const editForm = pane.getByRole('form', { name: 'Edit account' })
+  await editForm.getByLabel('Username').fill('alan-work')
+  await editForm.getByRole('button', { name: 'Save changes', exact: true }).click()
+  await accountRow.getByText('alan-work', { exact: true }).waitFor()
+  await ui.until(() => settingsFile().gitCreds[0].username === 'alan-work', 'account edited')
+  assert.equal(settingsFile().gitCreds.length, 1)
+  assert.ok(secret)
+
+  // A server that is not HTTP(S) is refused with a reason.
+  await pane.getByRole('button', { name: 'Add account', exact: true }).click()
+  await form.getByLabel('Server').fill('ssh://git@example.com')
+  await form.getByLabel('Username').fill('git')
+  await form.getByLabel('Password or token').fill('x')
+  await saveAccount.click()
+  await pane.getByRole('alert').getByText(/SSH remotes use your SSH keys/).waitFor()
+  await form.getByRole('button', { name: 'Cancel', exact: true }).click()
+
+  await ui.confirmNext(false)
+  await accountRow.getByRole('button', { name: 'Remove alan-work at github.com', exact: true }).click()
+  await page.waitForTimeout(400)
+  assert.equal(settingsFile().gitCreds.length, 1, 'Cancel keeps the account')
+  await ui.confirmNext(true)
+  await accountRow.getByRole('button', { name: 'Remove alan-work at github.com', exact: true }).click()
+  await ui.until(() => settingsFile().gitCreds.length === 0, 'account removed')
+  await pane.getByText(/No saved accounts yet/).waitFor()
+  await closePrefs()
 })
 
 test('Open with: lists launchers, rescans PATH and changes the default', async () => {

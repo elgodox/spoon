@@ -237,6 +237,31 @@ test('committing with nothing staged shows an error and creates nothing', async 
   await box.fill('')
 })
 
+test('file context menu: Ignore adds untracked files to .gitignore', async () => {
+  writeFile(repo, 'debug.log', 'noise\n')
+  writeFile(repo, 'cache/data.tmp', 'noise\n')
+  await refresh()
+  const log = row(unstagedPane(), 'debug.log')
+  await log.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Ignore this file', exact: true }).click()
+  await ui.until(() => existsSync(join(repo, '.gitignore')) && readFileSync(join(repo, '.gitignore'), 'utf8').includes('/debug.log'), 'file ignored')
+  await log.waitFor({ state: 'detached' })
+  const tmp = row(unstagedPane(), 'data.tmp')
+  await tmp.click({ button: 'right' })
+  await page.getByRole('menuitem', { name: 'Ignore all *.tmp files', exact: true }).click()
+  await ui.until(() => readFileSync(join(repo, '.gitignore'), 'utf8').includes('*.tmp'), 'extension ignored')
+  await tmp.waitFor({ state: 'detached' })
+  assert.equal(readFileSync(join(repo, '.gitignore'), 'utf8'), '/debug.log\n*.tmp\n')
+  await row(unstagedPane(), '.gitignore').waitFor()
+  // Tracked files have nothing to ignore.
+  writeFile(repo, 'notes.md', 'changed for the ignore test\n')
+  await refresh()
+  await row(unstagedPane(), 'notes.md').click({ button: 'right' })
+  await page.getByRole('menu', { name: 'File actions' }).waitFor()
+  assert.equal(await page.getByRole('menuitem', { name: /^Ignore/ }).count(), 0)
+  await page.keyboard.press('Escape')
+})
+
 test('no uncaught renderer errors', () => {
   assert.deepEqual(ui.unexpectedPageErrors(), [])
 })

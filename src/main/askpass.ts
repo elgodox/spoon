@@ -28,6 +28,21 @@ rm -f "$tmp"
 exit $status
 `
 
+// Git's credential-helper protocol: the request arrives on stdin and the answer leaves on
+// stdout. The same pipe and temp-file tricks apply, and stdin is read by sh for the same reason.
+const CREDENTIAL_WRAPPER = `#!/bin/sh
+SPOON_CRED_INPUT=\`cat\`
+export SPOON_CRED_INPUT
+tmp=\`mktemp\`
+SPOON_ASKPASS_OUT=$tmp
+if command -v cygpath >/dev/null 2>&1; then SPOON_ASKPASS_OUT=\`cygpath -w "$tmp"\`; fi
+export SPOON_ASKPASS_OUT
+ELECTRON_RUN_AS_NODE=1 "$SPOON_ASKPASS_NODE" "$SPOON_ASKPASS_MAIN" --credential "$1"
+cat "$tmp"
+rm -f "$tmp"
+exit 0
+`
+
 // Request and reply are one JSON line each. Windows named pipes do not half-close reliably,
 // so the helper never ends its side to mark the request complete; the newline does that.
 const HELPER = `const net = require('net')
@@ -42,12 +57,17 @@ const finish = () => {
   try { reply = JSON.parse(data.split('\\n')[0]) } catch { process.exit(1) }
   if (!reply || !reply.ok) process.exit(1)
   const out = process.env.SPOON_ASKPASS_OUT
-  if (out) fs.writeFileSync(out, reply.value + '\\n')
-  else process.stdout.write(reply.value + '\\n')
+  const text = reply.value && !reply.value.endsWith('\\n') ? reply.value + '\\n' : reply.value
+  if (out) fs.writeFileSync(out, text)
+  else process.stdout.write(text)
   process.exit(0)
 }
 socket.setEncoding('utf8')
-socket.on('connect', () => socket.write(JSON.stringify({ token: process.env.SPOON_ASKPASS_TOKEN, prompt: process.argv.slice(2).join(' ') }) + '\\n'))
+const args = process.argv.slice(2)
+const request = args[0] === '--credential'
+  ? { token: process.env.SPOON_ASKPASS_TOKEN, credential: { op: args[1] || '', input: process.env.SPOON_CRED_INPUT || '' } }
+  : { token: process.env.SPOON_ASKPASS_TOKEN, prompt: args.join(' ') }
+socket.on('connect', () => socket.write(JSON.stringify(request) + '\\n'))
 socket.on('data', (chunk) => {
   data += chunk
   if (data.includes('\\n')) finish()
@@ -105,11 +125,13 @@ export function createAskpassResponder(
 /**
  * Listen for the helper and write it to `dir`. Returns the environment that makes Git and SSH
  * use it; pass that only to commands the user started, never to background fetches.
+ * With `credential`, Spoon also becomes a Git credential helper (`SPOON_CREDENTIAL_HELPER`).
  */
 export async function startAskpass(
   dir: string,
   respond: (prompt: string) => Promise<string | null>,
-  node = process.execPath
+  node = process.execPath,
+  credential?: (op: string, input: string) => string | Promise<string>
 ): Promise<NodeJS.ProcessEnv> {
   const token = randomBytes(24).toString('hex')
   const id = `spoon-askpass-${process.pid}-${randomBytes(6).toString('hex')}`
@@ -123,10 +145,14 @@ export async function startAskpass(
       void (async () => {
         let reply: { ok: boolean; value?: string } = { ok: false }
         try {
-          const request = JSON.parse(line) as { token?: string; prompt?: string }
+          const request = JSON.parse(line) as { token?: string; prompt?: string; credential?: { op?: string; input?: string } }
           if (request.token === token) {
-            const value = await respond(String(request.prompt ?? ''))
-            if (value != null) reply = { ok: true, value }
+            if (request.credential) {
+              reply = { ok: true, value: credential ? await credential(String(request.credential.op ?? ''), String(request.credential.input ?? '')) : '' }
+            } else {
+              const value = await respond(String(request.prompt ?? ''))
+              if (value != null) reply = { ok: true, value }
+            }
           }
         } catch {
           /* malformed request or a failed dialog: Git sees a refusal */
@@ -160,8 +186,13 @@ export async function startAskpass(
   const wrapper = join(dir, 'askpass.sh')
   const helper = join(dir, 'askpass-main.js')
   writeFileSync(wrapper, WRAPPER, 'utf8')
+  const credentialWrapper = join(dir, 'credential.sh')
   writeFileSync(helper, HELPER, 'utf8')
-  if (process.platform !== 'win32') chmodSync(wrapper, 0o755)
+  writeFileSync(credentialWrapper, CREDENTIAL_WRAPPER, 'utf8')
+  if (process.platform !== 'win32') {
+    chmodSync(wrapper, 0o755)
+    chmodSync(credentialWrapper, 0o755)
+  }
   // Git for Windows runs the wrapper with its own sh, which prefers forward slashes.
   const posix = (path: string) => (process.platform === 'win32' ? path.replace(/\\/g, '/') : path)
   return {
@@ -171,6 +202,7 @@ export async function startAskpass(
     SPOON_ASKPASS_NODE: posix(node),
     SPOON_ASKPASS_MAIN: posix(helper),
     SPOON_ASKPASS_HANDLE: handle,
-    SPOON_ASKPASS_TOKEN: token
+    SPOON_ASKPASS_TOKEN: token,
+    ...(credential ? { SPOON_CREDENTIAL_HELPER: posix(credentialWrapper) } : {})
   }
 }

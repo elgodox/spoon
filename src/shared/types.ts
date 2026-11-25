@@ -296,6 +296,8 @@ export interface Settings {
   homeExpanded?: string[]
   /** Home sidebar shrunk to an icon rail. */
   homeRail?: boolean
+  /** Parent folder of the last clone, offered again in the Clone dialog. */
+  lastCloneDir?: string
 }
 
 export interface RebaseTodoItem {
@@ -487,6 +489,10 @@ export interface CredentialRequest {
   kind: CredentialKind
   /** Remote the credential is for, e.g. `https://github.com` (Git username/password prompts only). */
   target?: string
+  /** Username of an account already saved for this remote, to pre-fill the dialog. */
+  suggestedUsername?: string
+  /** The saved password for this remote was refused by the server. */
+  rejected?: boolean
 }
 
 export interface CredentialPromptEvent extends CredentialRequest {
@@ -497,4 +503,47 @@ export interface CredentialPromptEvent extends CredentialRequest {
 export interface CredentialAnswer {
   value: string
   password?: string
+  /** Save the credential in Spoon once the remote accepts it. */
+  remember?: boolean
+}
+
+/** A Git account saved in Spoon (the password never leaves the main process). */
+export interface GitCredentialInfo {
+  id: string
+  /** `https://github.com` */
+  url: string
+  host: string
+  username: string
+  updatedAt: number
+  usedAt?: number
+  /** The server refused this password the last time Git used it. */
+  rejected?: boolean
+}
+
+export interface GitCredentialInput {
+  id?: string
+  url: string
+  username: string
+  /** Empty when editing keeps the saved password. */
+  password?: string
+}
+
+/** A Git login kept by Windows Credential Manager (Git Credential Manager writes these). */
+export interface SystemCredentialInfo {
+  target: string
+  url: string
+  username: string
+}
+
+export interface GitIdentity {
+  name: string
+  email: string
+}
+
+export interface GitIdentityInfo {
+  global: GitIdentity
+  /** Set in the repository's own config; empty strings when it follows the global identity. */
+  local?: GitIdentity
+  /** Credential helpers Git runs besides Spoon, e.g. `manager`. */
+  helpers: string[]
 }

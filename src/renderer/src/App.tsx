@@ -1,9 +1,10 @@
 import { Button } from './Button'
 import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { FileCode2, FolderOpen, Copy, History, ScanLine, Plus, Undo2, Trash2, Pencil } from 'lucide-react'
+import { FileCode2, FolderOpen, Copy, History, ScanLine, Plus, Undo2, Trash2, Pencil, EyeOff } from 'lucide-react'
 import { Avatar, AvatarProvider } from './Avatar'
 import { ProfileSettings } from './ProfileSettings'
+import { GitAccounts, IdentityFields, tokenOnlyHost } from './GitAccounts'
 import { ContextMenu, type ContextState } from './ContextMenu'
 import { firstChangedLine, workingLine } from '../../shared/change-location'
 import type {
@@ -69,6 +70,7 @@ import {
   IcoFetch,
   IcoHealth,
   IcoHelp,
+  IcoKey,
   IcoHome,
   IcoLaunch,
   IcoOpen,
@@ -107,11 +109,12 @@ import {
   parseReflogSubject
 } from './lib'
 
-type PrefsTab = 'look' | 'profile' | 'git' | 'open' | 'ai' | 'help'
+type PrefsTab = 'look' | 'profile' | 'accounts' | 'git' | 'open' | 'ai' | 'help'
 type AiPick = { type: 'provider'; id: AiProviderId } | { type: 'add'; id: string } | { type: 'custom' }
 const PREFS_TABS: { id: PrefsTab; label: string; Icon: () => ReactNode }[] = [
   { id: 'look', label: 'Appearance', Icon: IcoTheme },
   { id: 'profile', label: 'Profile', Icon: IcoSpoon },
+  { id: 'accounts', label: 'Accounts', Icon: IcoKey },
   { id: 'git', label: 'Git', Icon: IcoBranch },
   { id: 'open', label: 'Open with', Icon: IcoOpen },
   { id: 'ai', label: 'AI', Icon: IcoAi },
@@ -1835,7 +1838,14 @@ function Workspace({
     setCommitBusy(true)
     onBusy(true)
     await catchErr(async () => {
-      await window.spoon.git.commit(path, { message: msg.trim() || snap.commits[0]?.subject || 'Update', amend })
+      try {
+        await window.spoon.git.commit(path, { message: msg.trim() || snap.commits[0]?.subject || 'Update', amend })
+      } catch (e) {
+        // A machine without user.name / user.email: take the user to the place that fixes it.
+        if (!/tell me who you are|empty ident name|auto-detect email/i.test(e instanceof Error ? e.message : String(e))) throw e
+        onOverlay({ type: 'settings', tab: 'accounts' })
+        throw new Error('Git needs your name and email before it can commit. Fill them in under Commit identity and commit again.')
+      }
       if (pushAfter) {
         await pushHead(path, snap)
         document.dispatchEvent(new CustomEvent('spoon-confetti'))
@@ -2162,6 +2172,12 @@ function Workspace({
       {},
       { label: n > 1 ? 'Copy relative paths' : 'Copy relative path', icon: <Copy />, run: run(() => window.spoon.app.copy(paths.join('\n'))) },
       { label: n > 1 ? 'Copy full paths' : 'Copy full path', icon: <Copy />, run: run(() => window.spoon.app.copy(paths.map((p) => joinRepoPath(path, p)).join('\n'))) },
+      ...(entry.untracked && !staged ? [
+        { label: n > 1 ? `Ignore ${n} files` : 'Ignore this file', icon: <EyeOff />, run: run(async () => { await window.spoon.git.ignore(path, paths.map((p) => `/${p}`)); onReload() }) },
+        ...(n === 1 && fileType(entry.path) !== '(none)' ? [{ label: `Ignore all *${fileType(entry.path)} files`, icon: <EyeOff />, run: run(async () => { await window.spoon.git.ignore(path, [`*${fileType(entry.path)}`]); onReload() }) }] : []),
+        ...(n === 1 && entry.path.includes('/') ? [{ label: `Ignore folder ${parentDir(entry.path)}/`, icon: <EyeOff />, run: run(async () => { await window.spoon.git.ignore(path, [`/${parentDir(entry.path)}/`]); onReload() }) }] : []),
+        {}
+      ] : []),
       { label: 'Copy patch', icon: <Copy />, disabled: entry.untracked, run: run(async () => { const parts = await Promise.all(paths.map((p) => window.spoon.git.diff(path, { path: p, staged }))); await window.spoon.app.copy((parts.flat() as FileDiff[]).map((d) => d.patch).join('\n')) }) },
       {},
       { label: 'Blame', icon: <ScanLine />, disabled: entry.untracked, run: () => onOverlay({ type: 'blame', file: entry.path }) },
@@ -2474,7 +2490,40 @@ function Workspace({
           </div>
           {sideOpen('tags') &&
             snap.tags.filter((t) => match(t.name)).map((t) => (
-              <div key={t.name} className="side-item tree-row" onClick={() => setSel({ kind: 'tag', name: t.name })}>
+              <div
+                key={t.name}
+                className="side-item tree-row"
+                onClick={() => setSel({ kind: 'tag', name: t.name })}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  const remote = snap.remotes.some((r) => r.name === 'origin') ? 'origin' : snap.remotes[0]?.name
+                  openMenu(
+                    [
+                      { id: 'tag-checkout', label: 'Checkout' },
+                      { id: 'tag-copy', label: 'Copy name' },
+                      { type: 'separator' },
+                      { id: 'tag-push', label: remote ? `Push to ${remote}` : 'Push tag', enabled: !!remote },
+                      { id: 'tag-delete-remote', label: remote ? `Delete from ${remote}...` : 'Delete from remote...', enabled: !!remote },
+                      { type: 'separator' },
+                      { id: 'tag-delete', label: 'Delete tag...' }
+                    ],
+                    (id) => {
+                      void catchErr(async () => {
+                        if (id === 'tag-checkout') await window.spoon.git.checkout(path, t.name)
+                        if (id === 'tag-copy') await window.spoon.app.copy(t.name)
+                        if (id === 'tag-push') await window.spoon.git.pushTag(path, t.name, remote)
+                        if (id === 'tag-delete-remote' && (await window.spoon.app.confirm(`Delete tag ${t.name} from ${remote}?`, 'The tag stays in this repository.')))
+                          await window.spoon.git.deleteRemoteTag(path, t.name, remote)
+                        if (id === 'tag-delete' && (await window.spoon.app.confirm(`Delete tag ${t.name}?`, 'Only the local tag is deleted.'))) {
+                          await window.spoon.git.deleteTag(path, t.name)
+                          if (sel.kind === 'tag' && sel.name === t.name) setSel({ kind: 'all' })
+                        }
+                        onReload()
+                      })
+                    }
+                  )
+                }}
+              >
                 <span className="twisty" aria-hidden />
                 <IcoTag />
                 <span className="label">{t.name}</span>
@@ -2494,6 +2543,7 @@ function Workspace({
               <span className="label">{s.message}</span>
             </div>
           ))}
+          {!snap.stashes.length && <div className="side-empty">No stashes</div>}
           <div className="side-sec">Submodules</div>
           {snap.submodules.map((s) => (
             <div
@@ -2506,7 +2556,7 @@ function Workspace({
               {s.status !== 'ok' && <span className="sub-st">{s.status}</span>}
             </div>
           ))}
-          {!snap.submodules.length && <div className="empty">No submodules</div>}
+          {!snap.submodules.length && <div className="side-empty">No submodules</div>}
         </div>
       </div>
       <div
@@ -2875,7 +2925,8 @@ function Workspace({
                     { id: `rs:${c.hash}`, label: 'Reset mixed...' },
                     { id: `rh:${c.hash}`, label: 'Reset hard...' },
                     { id: `cp:${c.hash}`, label: 'Copy SHA' },
-                    { id: `tg:${c.hash}`, label: 'Create tag...' }
+                    { id: `tg:${c.hash}`, label: 'Create tag...' },
+                    ...(c.refs.some((r) => r.type === 'head') ? [{ type: 'separator' }, { id: `un:${c.hash}`, label: 'Undo this commit...' }] : [])
                   ],
                   (s) => {
                     void catchErr(async () => {
@@ -2892,6 +2943,13 @@ function Workspace({
                       }
                       if (s.startsWith('cp:')) await window.spoon.app.copy(s.slice(3))
                       if (s.startsWith('tg:')) onOverlay({ type: 'tag', hash: s.slice(3) })
+                      if (s.startsWith('un:')) {
+                        const ok = await window.spoon.app.confirm('Undo the last commit?', 'The commit is removed from this branch. Its changes stay staged and its message goes back to the commit box.')
+                        if (ok) {
+                          setMsg((await window.spoon.git.undoCommit(path)) as string)
+                          setSel({ kind: 'changes' })
+                        }
+                      }
                       onReload()
                     })
                   }
@@ -3876,38 +3934,77 @@ function CloneDialog({ onClose, onOpen }: { onClose: () => void; onOpen: (p: str
   const [name, setName] = useState('')
   const [progress, setProgress] = useState('')
   const [busy, setBusy] = useState(false)
+  const [who, setWho] = useState<{ name: string; email: string } | null>(null)
   useEffect(() => window.spoon.app.on('clone:progress', (l) => setProgress((p) => p + String(l))), [])
+  // Start in the folder of the last clone.
+  useEffect(() => {
+    void window.spoon.app.settings().then((s: Settings) => setDir((current) => current || s.lastCloneDir || ''))
+  }, [])
+  const guess = url.trim().replace(/[\\/]+$/, '').replace(/\.git$/i, '').split(/[\\/:]/).filter(Boolean).pop() ?? ''
+  const ready = !!url.trim() && !!dir.trim() && !busy
+  const clone = () => {
+    if (!ready) return
+    setBusy(true)
+    setProgress('')
+    void catchErr(async () => {
+      const dest = (await window.spoon.git.clone({ url: url.trim(), directory: dir.trim(), name: name.trim() || undefined, recursive: true })) as string
+      void window.spoon.app.patchSettings({ lastCloneDir: dir.trim() })
+      onOpen(dest)
+      // A new machine has no commit identity yet: ask now instead of failing on the first commit.
+      const identity = await window.spoon.git.identity(dest).catch(() => null)
+      if (identity && (!identity.name || !identity.email)) setWho(identity)
+      else onClose()
+    }).finally(() => setBusy(false))
+  }
+  const enter = (e: { key: string }) => e.key === 'Enter' && clone()
+  if (who)
+    return (
+      <Modal title="Who is committing?" onClose={onClose}>
+        <p>The repository is cloned. Git still needs your name and email to sign the commits you create.</p>
+        <form
+          aria-label="Commit identity"
+          onSubmit={(e) => {
+            e.preventDefault()
+            setBusy(true)
+            void catchErr(async () => {
+              await window.spoon.credentials.setIdentity('global', who)
+              onClose()
+            }).finally(() => setBusy(false))
+          }}
+        >
+          <IdentityFields idPrefix="clone-identity" value={who} onChange={setWho} disabled={busy} />
+          <p className="hint">Saved for all your repositories. Change it later in Preferences → Accounts.</p>
+          <div className="dialog-foot">
+            <Button className="ghost" onClick={onClose}>
+              Not now
+            </Button>
+            <Button className="primary" type="submit" disabled={busy || !who.name.trim() || !/^\S+@\S+$/.test(who.email.trim())}>
+              Save identity
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    )
   return (
     <Modal title="Clone" onClose={onClose}>
       <label>URL</label>
-      <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://github.com/org/repo.git" />
+      <input autoFocus value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={enter} placeholder="https://github.com/org/repo.git" />
       <label>Parent directory</label>
       <div className="row-btns">
-        <input value={dir} onChange={(e) => setDir(e.target.value)} />
+        <input value={dir} onChange={(e) => setDir(e.target.value)} onKeyDown={enter} />
         <Button className="ghost" onClick={async () => setDir((await window.spoon.app.pickDirectory()) || dir)}>
           Browse
         </Button>
       </div>
       <label>Folder name (optional)</label>
-      <input value={name} onChange={(e) => setName(e.target.value)} />
+      <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={enter} placeholder={guess} />
+      <p className="hint">Private repository? Spoon asks you to sign in when the remote needs it, and can remember the account.</p>
       {progress && <pre className="hint">{progress.slice(-400)}</pre>}
       <div className="dialog-foot">
         <Button className="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button
-          className="primary"
-          disabled={!url.trim() || !dir.trim() || busy}
-          onClick={() => {
-            setBusy(true)
-            setProgress('')
-            void catchErr(async () => {
-              const dest = (await window.spoon.git.clone({ url: url.trim(), directory: dir.trim(), name: name.trim() || undefined, recursive: true })) as string
-              onOpen(dest)
-              onClose()
-            }).finally(() => setBusy(false))
-          }}
-        >
+        <Button className="primary" disabled={!ready} onClick={clone}>
           {busy ? 'Cloning...' : 'Clone'}
         </Button>
       </div>
@@ -3920,22 +4017,39 @@ function CredentialPrompt() {
   const [queue, setQueue] = useState<CredentialPromptEvent[]>([])
   const [value, setValue] = useState('')
   const [password, setPassword] = useState('')
+  const [remember, setRemember] = useState(true)
   useEffect(() => window.spoon.app.on('credential:prompt', (req) => setQueue((q) => [...q, req as CredentialPromptEvent])), [])
   const req = queue[0]
+  // A saved account for this remote fills in the username.
+  useEffect(() => {
+    if (req?.kind === 'username') setValue(req.suggestedUsername ?? '')
+  }, [req?.id])
   if (!req) return null
   const answer = (a: CredentialAnswer | null) => {
     void window.spoon.app.answerCredential(req.id, a)
     setQueue((q) => q.slice(1))
     setValue('')
     setPassword('')
+    setRemember(true)
   }
   const host = req.target?.replace(/^[a-z+]+:\/\//i, '').replace(/^[^@/]*@/, '').split('/')[0] ?? ''
-  const tokenHint = /(^|\.)(github\.com|gitlab\.com|bitbucket\.org|dev\.azure\.com)$/i.test(host)
+  const tokenHint = tokenOnlyHost(req.target ?? '')
+  // Only Git's own username / password prompts name the remote, so only those can be saved.
+  const canRemember = !!req.target && (req.kind === 'username' || req.kind === 'password')
   const ready = req.kind === 'username' ? !!value.trim() : true
   const submit = () => {
     if (!ready) return
-    answer(req.kind === 'username' ? { value: value.trim(), password } : { value })
+    answer(req.kind === 'username' ? { value: value.trim(), password, remember: canRemember && remember } : { value, remember: canRemember && remember })
   }
+  const rememberBox = canRemember && (
+    <label className="check credential-remember">
+      <input type="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+      <span>
+        Remember this account
+        <span className="hint">Saved encrypted on this computer. Manage it in Preferences → Accounts.</span>
+      </span>
+    </label>
+  )
   const enter = (e: { key: string }) => e.key === 'Enter' && submit()
   if (req.kind === 'confirm')
     return (
@@ -3958,16 +4072,23 @@ function CredentialPrompt() {
           <p>
             <strong>{req.target}</strong> needs your credentials.
           </p>
+          {req.rejected && (
+            <p className="account-warning" role="status">
+              The saved password for {req.suggestedUsername} was refused. Enter the current one.
+            </p>
+          )}
           <label>Username</label>
-          <input autoFocus value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={enter} autoComplete="username" />
+          <input autoFocus={!req.suggestedUsername} value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={enter} autoComplete="username" />
           <label>{tokenHint ? 'Personal access token' : 'Password or token'}</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={enter} autoComplete="current-password" />
+          <input autoFocus={!!req.suggestedUsername} type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={enter} autoComplete="current-password" />
           {tokenHint && <p className="hint">{host} no longer accepts account passwords for Git. Use a personal access token.</p>}
+          {rememberBox}
         </>
       ) : (
         <>
           <pre className="hint credential-prompt">{req.prompt}</pre>
           <input autoFocus type={req.kind === 'password' ? 'password' : 'text'} value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={enter} />
+          {rememberBox}
         </>
       )}
       <div className="dialog-foot">
@@ -4522,6 +4643,8 @@ function SettingsDialog({
             </div>
             <div className="prefs-main">
       {tab === 'profile' && <ProfileSettings settings={settings} repo={repo} onPersist={persist} />}
+
+      {tab === 'accounts' && <GitAccounts repo={repo} />}
 
       {tab === 'look' && (
         <section className="prefs-pane" role="tabpanel" id="prefs-panel-look" aria-labelledby="prefs-tab-look">

@@ -17,6 +17,7 @@ import {
   GitBranch,
   Globe,
   HeartPulse,
+  KeyRound,
   House,
   LayoutGrid,
   Pin,
@@ -54,6 +55,7 @@ function S(props: SVGProps<SVGSVGElement> & { children: ReactNode }) {
   )
 }
 
+export const IcoKey = lucide(KeyRound)
 export const IcoFetch = lucide(CloudDownload)
 export const IcoPull = lucide(ArrowDownToLine)
 export const IcoPush = lucide(ArrowUpFromLine)

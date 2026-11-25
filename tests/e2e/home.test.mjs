@@ -291,13 +291,73 @@ test('Clone from a password-protected remote asks for credentials in Spoon', asy
     await signIn.getByText(url).waitFor()
     await signIn.locator('input').nth(0).fill('alan')
     await signIn.locator('input[type="password"]').fill('tok3n')
+    assert.equal(await signIn.getByLabel('Remember this account').isChecked(), true, 'Remember is on by default')
     await signIn.getByRole('button', { name: 'Sign in', exact: true }).click()
     await ui.until(() => existsSync(join(parent, 'private', 'README.md')), 'cloned with credentials')
     assert.ok(attempts.includes('alan:tok3n'))
     await page.locator('.tabs .tab.active', { hasText: 'private' }).waitFor()
+
+    // The account is saved (encrypted) once the remote accepted it.
+    await ui.until(() => (settingsFile().gitCreds ?? []).length === 1, 'account remembered')
+    const saved = settingsFile().gitCreds[0]
+    assert.equal(saved.username, 'alan')
+    assert.equal(`http://${saved.host}`, url)
+    assert.ok(!readFileSync(join(box.data, 'spoon.json'), 'utf8').includes('tok3n'), 'the password is not stored as plain text')
+
+    // The next clone from that server does not ask again.
+    await toolbar(page, 'home')
+    await page.getByRole('button', { name: 'Clone', exact: true }).first().click()
+    const again = dialogBox(page, 'Clone')
+    await again.locator('input').nth(0).fill(`${url}/${bare.split(/[\\/]/).pop()}`)
+    assert.equal(await again.locator('input').nth(1).inputValue(), parent, 'the last clone folder is offered again')
+    await again.locator('input').nth(2).fill('private-again')
+    await again.locator('input').nth(2).press('Enter')
+    await ui.until(() => existsSync(join(parent, 'private-again', 'README.md')), 'cloned with the saved account')
+    assert.equal(await dialogBox(page, 'Sign in').count(), 0)
+
+    // Preferences → Accounts lists it and can forget it.
+    await toolbar(page, 'settings')
+    const prefs = page.locator('.dialog.prefs')
+    await prefs.locator('nav.rail').getByRole('button', { name: 'Accounts', exact: true }).click()
+    const accountRow = prefs.locator('.account-row').filter({ hasText: saved.host })
+    await accountRow.getByText('alan').waitFor()
+    await ui.confirmNext(true)
+    await accountRow.getByRole('button', { name: /^Remove alan/ }).click()
+    await ui.until(() => (settingsFile().gitCreds ?? []).length === 0, 'account removed')
+    await prefs.getByText(/No saved accounts yet/).waitFor()
+    await prefs.getByRole('button', { name: 'Done', exact: true }).click()
     await toolbar(page, 'home')
   } finally {
     server.close()
+  }
+})
+
+test('Clone on a machine without a commit identity asks for the name and email', async () => {
+  const parent = join(box.dir, 'identity-clones')
+  mkdirSync(parent)
+  const config = readFileSync(box.gitconfig, 'utf8')
+  writeFileSync(box.gitconfig, config.replace(/\[user\][^[]*/, ''))
+  try {
+    await page.getByRole('button', { name: 'Clone', exact: true }).first().click()
+    const dialog = dialogBox(page, 'Clone')
+    const inputs = dialog.locator('input')
+    await inputs.nth(0).fill(bare)
+    await inputs.nth(1).fill(parent)
+    await inputs.nth(2).fill('fresh')
+    await dialog.getByRole('button', { name: 'Clone', exact: true }).click()
+    const who = dialogBox(page, 'Who is committing?')
+    await who.waitFor()
+    assert.ok(existsSync(join(parent, 'fresh', '.git')), 'the clone itself is done')
+    const save = who.getByRole('button', { name: 'Save identity', exact: true })
+    assert.equal(await save.isDisabled(), true)
+    await who.getByLabel('Name').fill('Ada Lovelace')
+    await who.getByLabel('Email').fill('ada@example.com')
+    await save.click()
+    await who.waitFor({ state: 'detached' })
+    assert.equal(git(parent, ['config', '--global', 'user.name']).trim(), 'Ada Lovelace')
+    assert.equal(git(parent, ['config', '--global', 'user.email']).trim(), 'ada@example.com')
+  } finally {
+    writeFileSync(box.gitconfig, config)
   }
 })
 
